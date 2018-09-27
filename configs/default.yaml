@@ -1,0 +1,44 @@
+debug: True
+no_cuda: no
+epochs_no: 100
+batch_size: 1024
+test_batch_size: 10000
+
+task_model:
+  name: MLP
+  units: [100]
+  use_bias: False
+  use_dropout: False
+
+task_optimizer:
+  name: Adam
+  lr: 0.001
+  nesterov: delete
+
+l2: 0.2
+
+loss_learning:
+  nprofessors: 5
+  loss_predictor:
+    name: MLPLossPredictor
+    inter_layer: no
+    width: 1
+  optimizer:
+    name: Adam
+    lr: .001
+    nesterov: delete
+  param_samples: 4
+  noise_intensity: .01
+  noise_type: absolute
+  full_grad: yes
+  sobolev_depth: 2
+  c0: 1.0
+  c1: 1.0
+  c2: 1.0
+
+teaching_steps: 1000
+teaching_eval_freq: 50
+
+
+log_interval: 1024
+eval_interval: 20480
