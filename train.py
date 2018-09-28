@@ -1,3 +1,4 @@
+import os.path
 from typing import Iterator, Tuple
 from argparse import Namespace
 from collections import OrderedDict
@@ -91,21 +92,24 @@ def test(model, device, test_loader, verbose=True):
 
 # -- Professor evaluation
 
-def test_professor(professor, device, test_loader, args):
+def test_professor(professor, device, test_loader, args, state_dict=None):
     # TODO: changed the fixed @nin and @nout below
     task_model = get_model(classifiers, args.task_model, nin=784, nout=10).to(device)
-    task_optimizer = get_optimizer(task_model.parameters(), args.task_optimizer)
+    if state_dict is not None:
+        task_model.load_state_dict(state_dict)
+    student_optimizer = get_optimizer(task_model.parameters(),
+                                      args.student_optimizer)
 
     max_acc, accs = 0, []
-    for step in range(args.teaching_steps):
-        task_optimizer.zero_grad()
+    for step in range(args.evaluation.teaching_steps):
+        student_optimizer.zero_grad()
         synthetic_loss = professor.eval_student(task_model)
         if args.l2:
             l2_loss = l2(task_model.named_parameters()) * args.l2
             synthetic_loss += l2_loss
         synthetic_loss.backward()
-        task_optimizer.step()
-        if (step + 1) % args.teaching_eval_freq == 0:
+        student_optimizer.step()
+        if (step + 1) % args.evaluation.teaching_eval_freq == 0:
             acc = test(task_model, device, test_loader, verbose=False)
             task_model.train()
             max_acc = max(acc, max_acc)
@@ -137,6 +141,10 @@ def run(args: Namespace):
     task_model = get_model(classifiers, args.task_model, nin=784, nout=10).to(device)
     task_optimizer = get_optimizer(task_model.parameters(), args.task_optimizer)
     print_nparams(task_model, name="Task model")
+
+    if not args.evaluation.random_params:
+        state_dict = OrderedDict([(name, t.clone()) for (name, t)
+                                  in task_model.state_dict().items()])
 
     # -- Loss learning
 
@@ -290,7 +298,13 @@ def run(args: Namespace):
             if seen_examples - last_eval >= args.eval_interval:
                 test(task_model, device, test_loader)
                 task_model.train()
-                score = test_professor(loss_learner, device, test_loader, args)
+                if args.evaluation.random_params:
+                    start_params = OrderedDict([(name, t.clone()) for (name, t)
+                                                in state_dict.items()])
+                else:
+                    start_params = None
+
+                score = test_professor(loss_learner, device, test_loader, args, state_dict=start_params)
                 scores.append(score)
                 last_eval += args.eval_interval
 
@@ -301,7 +315,9 @@ def run(args: Namespace):
         scores.append(score)
             
 
-    with open(os.path.join(args.out_dir, "score")) as f:
+    print(f"Final score: {np.mean(scores):.3f}")
+
+    with open(os.path.join(args.out_dir, "fitness"), "w") as f:
         f.write("{np.mean(scores):f}\n")
 
     return np.mean(scores)
@@ -311,6 +327,10 @@ def run(args: Namespace):
 
 def main() -> None:
     # Reading args
+    import os.path
+    import os
+    from liftoff.config import read_config
+
     args = read_config()  # type: Args
 
     if not hasattr(args, "out_dir"):

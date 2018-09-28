@@ -72,10 +72,9 @@ class MLPLossPredictor(nn.Module):
                         nout = width * np.int(np.sqrt(n1 * n2))
                         layer = nn.Linear(n1 * n2, nout, bias=False)
                         total_features += nout
-
-                        self.per_pairs[(last_name, name)] = (
-                            (torch.ones(d2, d1) / (d1 + d2)).to(param.device),
-                            layer)
+                        corr = nn.Parameter(torch.randn(1, d2, d1).to(param.device) / (d1 + d2))
+                        self.per_pairs[(last_name, name)] = (corr, layer)
+                        setattr(self, f"corr_{last_idx:d}_{idx:d}", corr)
                         setattr(self, f"layers_{last_idx:d}_{idx:d}", layer)
 
                         last_param, last_name, last_idx = crt_param, name, idx
@@ -101,9 +100,10 @@ class MLPLossPredictor(nn.Module):
             if self.inter_layer and "bias" not in param_name:
                 crt_param = param.view(batch_size, nout, -1)
                 if (last_name, param_name) in self.per_pairs:
+                    d1, d2 = last_param.size(2), crt_param.size(2)
                     corr, layer = self.per_pairs[(last_name, param_name)]
-                    left = torch.bmm(corr.transpose(0, 1).unsqueeze(0).expand(batch_size, *corr.size()))
-                    features.append(layer(torch.bmm(left, crt_param).view(batch_size, -1)))
+                    left = torch.bmm(last_param, corr.expand(batch_size, d2, d1).transpose(1, 2))
+                    features.append(layer(torch.bmm(left, crt_param.transpose(1, 2)).view(batch_size, -1)))
                 last_param, last_name = crt_param, param_name
                     
         return self.fc(torch.cat(tuple(features), dim=1)).squeeze(1)

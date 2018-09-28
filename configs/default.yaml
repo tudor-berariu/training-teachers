@@ -1,4 +1,4 @@
-debug: True
+debug: yes
 no_cuda: no
 epochs_no: 100
 batch_size: 1024
@@ -15,14 +15,20 @@ task_optimizer:
   lr: 0.001
   nesterov: delete
 
+student_optimizer:
+  name: Adam
+  lr: 0.001
+  nesterov: delete
+
+
 l2: 0.2
 
 loss_learning:
-  nprofessors: 5
+  nprofessors: 1
   loss_predictor:
     name: MLPLossPredictor
-    inter_layer: no
-    width: 1
+    inter_layer: yes
+    width: 2
   optimizer:
     name: Adam
     lr: .001
@@ -36,8 +42,10 @@ loss_learning:
   c1: 1.0
   c2: 1.0
 
-teaching_steps: 1000
-teaching_eval_freq: 50
+evaluation:
+  random_params: no
+  teaching_steps: 1000
+  teaching_eval_freq: 50
 
 
 log_interval: 1024
