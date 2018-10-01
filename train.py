@@ -318,7 +318,7 @@ def run(args: Namespace):
     print(f"Final score: {np.mean(scores):.3f}")
 
     with open(os.path.join(args.out_dir, "fitness"), "w") as f:
-        f.write("{np.mean(scores):f}\n")
+        f.write(f"{np.mean(scores):f}\n")
 
     return np.mean(scores)
 
