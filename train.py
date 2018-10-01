@@ -64,8 +64,11 @@ def get_optimizer(parameters, opt_args: Namespace) -> optim.Optimizer:
 
 # -- Some cost functions that are applied on iterable collections of tensors
 
-def collapse(parameters: Iterator[Tensor]):
+def collapse(parameters: Iterator[Tensor], detach: bool= False):
     # TODO: collapse batches of parameters
+    if detach:
+        return torch.cat(tuple(t.clone().view(-1).detach() for t in parameters))
+
     return torch.cat(tuple(t.view(-1) for t in parameters))
 
 
@@ -75,7 +78,7 @@ def l2(named_parameters: Iterator[Tuple[str, Tensor]]) -> Tensor:
 
 def cos(parameters: Iterator[Tensor], targets: Iterator[Tensor]):
     flat_parameters = collapse(parameters).unsqueeze(0)
-    flat_targets = collapse(targets).unsqueeze(0)
+    flat_targets = collapse(targets, detach=True).unsqueeze(0)
     return F.cosine_embedding_loss(flat_parameters, flat_targets,
                                    torch.Tensor([1]).to(flat_parameters.device))
 
@@ -126,7 +129,6 @@ def test_professor(professor, device, test_loader, args, state_dict=None):
         for step in range(args.evaluation.teaching_steps):
             student_optimizer.zero_grad()
             synthetic_loss = professor.eval_student(task_model)
-            print(synthetic_loss.item())
             if args.l2:
                 l2_loss = l2(task_model.named_parameters()) * args.l2
                 synthetic_loss += l2_loss
@@ -199,6 +201,8 @@ def run(args: Namespace):
     last_seen, last_eval = 0, 0
 
     ag_kwargs = {"create_graph": True, "retain_graph": True, "only_inputs": True}
+
+    found_nan = False
 
     for epoch in range(args.epochs_no):
         for batch_idx, (data, target) in enumerate(train_loader):
@@ -310,6 +314,10 @@ def run(args: Namespace):
                 llargs.c2 * loss2 + \
                 llargs.coptim * lossoptim
 
+            if torch.isnan(professor_loss).any().item():
+                found_nan = True
+                break
+
             ll_losses.append(professor_loss.item())
 
             # -- Perform backpropagation
@@ -349,12 +357,16 @@ def run(args: Namespace):
                 print(f"[*****] Fitness = {score:.2f}")
                 scores.append(score)
                 last_eval += args.eval_interval
+        if found_nan:
+            break
 
-    if seen_examples > last_eval:
+    if not found_nan and seen_examples > last_eval:
         test(task_model, device, test_loader)
         task_model.train()
         score = test_professor(loss_learner, device, test_loader, args)
         scores.append(score)
+    elif found_nan:
+        scores = [.0]
 
     print(f"Final score: {np.mean(scores):.3f}")
 
