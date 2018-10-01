@@ -1,8 +1,11 @@
+import os
 import os.path
 from typing import Iterator, Tuple
 from argparse import Namespace
 from collections import OrderedDict
 from itertools import chain
+from termcolor import colored as clr
+import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -10,8 +13,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.autograd as autograd
 from torchvision import datasets, transforms
-import numpy as np
-from termcolor import colored as clr
+
+from liftoff.config import dict_to_namespace
 
 from utils import get_kwargs
 import models.classifiers as classifiers
@@ -47,29 +50,43 @@ def get_loaders(args: Namespace, use_cuda: bool):
 
 def get_model(module, model_args, *args, **kwargs):
     cfgargs = get_kwargs(model_args)
-    print("[MAIN_] The arguments for the", clr(model_args.name, 'red'), "model: ", cfgargs)
+    print("[MAIN_] The arguments for the", clr(model_args.name, 'red'),
+          "model: ", cfgargs)
     return getattr(module, model_args.name)(*args, **cfgargs, **kwargs)
 
 
 def get_optimizer(parameters, opt_args: Namespace) -> optim.Optimizer:
     cfgargs = get_kwargs(opt_args)
-    print("[MAIN_] The arguments for the", clr(opt_args.name, 'red'), "optimizer: ", cfgargs)
+    print("[MAIN_] The arguments for the", clr(opt_args.name, 'red'),
+          "optimizer: ", cfgargs)
     return getattr(optim, opt_args.name)(parameters, **cfgargs)
 
 
-# -- L2 regularization
+# -- Some cost functions that are applied on iterable collections of tensors
+
+def collapse(parameters: Iterator[Tensor]):
+    # TODO: collapse batches of parameters
+    return torch.cat(tuple(t.view(-1) for t in parameters))
+
 
 def l2(named_parameters: Iterator[Tuple[str, Tensor]]) -> Tensor:
     return sum(param.pow(2).sum() for (_, param) in named_parameters)
 
-# -- MSE distance between sets of parameters
+
+def cos(parameters: Iterator[Tensor], targets: Iterator[Tensor]):
+    flat_parameters = collapse(parameters).unsqueeze(0)
+    flat_targets = collapse(targets).unsqueeze(0)
+    return F.cosine_embedding_loss(flat_parameters, flat_targets,
+                                   torch.Tensor([1]).to(flat_parameters.device))
+
 
 def mse(params: Iterator[Tensor], targets: Iterator[Tensor]) -> Tensor:
-    mse = nn.MSELoss(reduction='sum')
-    return sum(mse(y, t.detach()) for (y, t) in zip(params, targets))
+    mse_loss = nn.MSELoss(reduction='sum')
+    return sum(mse_loss(y, t.detach()) for (y, t) in zip(params, targets))
 
 # -- Student evaluation
-    
+
+
 def test(model, device, test_loader, verbose=True):
     model.eval()
     test_loss = .0
@@ -92,34 +109,44 @@ def test(model, device, test_loader, verbose=True):
 
 # -- Professor evaluation
 
+
 def test_professor(professor, device, test_loader, args, state_dict=None):
-    # TODO: changed the fixed @nin and @nout below
-    task_model = get_model(classifiers, args.task_model, nin=784, nout=10).to(device)
-    if state_dict is not None:
-        task_model.load_state_dict(state_dict)
-    student_optimizer = get_optimizer(task_model.parameters(),
-                                      args.student_optimizer)
+    all_accs = []  # For all optimizers
+    for optimizer_args in args.student_optimizers:
+        if isinstance(optimizer_args, dict):
+            optimizer_args = dict_to_namespace(optimizer_args)
+        # TODO: changed the fixed @nin and @nout below
+        task_model = get_model(classifiers, args.task_model, nin=784, nout=10).to(device)
+        if state_dict is not None:
+            task_model.load_state_dict(state_dict)
+        start_acc = test(task_model, device, test_loader, verbose=False)
+        student_optimizer = get_optimizer(task_model.parameters(), optimizer_args)
 
-    max_acc, accs = 0, []
-    for step in range(args.evaluation.teaching_steps):
-        student_optimizer.zero_grad()
-        synthetic_loss = professor.eval_student(task_model)
-        if args.l2:
-            l2_loss = l2(task_model.named_parameters()) * args.l2
-            synthetic_loss += l2_loss
-        synthetic_loss.backward()
-        student_optimizer.step()
-        if (step + 1) % args.evaluation.teaching_eval_freq == 0:
-            acc = test(task_model, device, test_loader, verbose=False)
-            task_model.train()
-            max_acc = max(acc, max_acc)
-            accs.append(acc)
-            print(f"[TEACH] [Step={(step + 1):d}] "
-                  f"Avg. acc: {np.mean(accs):.2f}% | Max. acc: {max_acc:.2f}%")
-    return np.mean(accs)
+        max_acc, accs = 0, []
+        for step in range(args.evaluation.teaching_steps):
+            student_optimizer.zero_grad()
+            synthetic_loss = professor.eval_student(task_model)
+            print(synthetic_loss.item())
+            if args.l2:
+                l2_loss = l2(task_model.named_parameters()) * args.l2
+                synthetic_loss += l2_loss
+            synthetic_loss.backward()
+            student_optimizer.step()
+            if (step + 1) % args.evaluation.teaching_eval_freq == 0:
+                acc = test(task_model, device, test_loader, verbose=False)
+                acc -= start_acc
+                task_model.train()
+                max_acc = max(acc, max_acc)
+                accs.append(acc)
+                print(f"[TEACH] [Step={(step + 1):d}] "
+                      f"Avg. acc: {np.mean(accs):.2f}% | Max. acc: {max_acc:.2f}%")
+        opt_acc = np.mean(accs)
+        all_accs.append(opt_acc)
+
+    return max(0, np.mean(all_accs))
 
 
-def print_nparams(model: nn.Module, name: str = "Model") -> None:
+def print_nparams(model: nn.Module, name: str="Model") -> None:
     nparams = sum(p.nelement() for p in model.parameters())
     print(f"[MAIN_] {name:s} has {clr(f'{nparams:d}', 'yellow'):s} params.")
 
@@ -172,7 +199,6 @@ def run(args: Namespace):
     last_seen, last_eval = 0, 0
 
     ag_kwargs = {"create_graph": True, "retain_graph": True, "only_inputs": True}
-
 
     for epoch in range(args.epochs_no):
         for batch_idx, (data, target) in enumerate(train_loader):
@@ -239,6 +265,8 @@ def run(args: Namespace):
             # INFO: torch.stack has some issues with autograd, we avoid it for now
 
             loss1, loss2 = 0, 0
+            losscos = 0
+            lossoptim = 0
 
             loss0 = F.mse_loss(torch.stack(loss_predictions),
                                stacked_nlls.unsqueeze(0).expand(nprofessors, nsamples).detach())
@@ -257,6 +285,8 @@ def run(args: Namespace):
                                         grad_outputs=torch.ones_like(loss_predictions[k]),
                                         **ag_kwargs)
                     loss1 += mse(g_k, target_g)
+                    losscos += cos(g_k, target_g)
+
                     if llargs.sobolev_depth > 1:
                         Hv_k = autograd.grad(g_k,
                                              chain(*(p.values() for p in used_params)),
@@ -264,13 +294,24 @@ def run(args: Namespace):
                                              **ag_kwargs)
                         loss2 += mse(Hv_k, target_Hv)
 
+                    if llargs.optim_loss:
+                        g_k_iter = iter(g_k)
+                        for usedp in used_params:
+                            one_step_params = OrderedDict({})
+                            for key, value in usedp.items():
+                                one_step_params[key] = value - .01 * next(g_k_iter)
+                            next_output = task_model(data, one_step_params)
+                            next_nll = F.cross_entropy(next_output, target)
+                            lossoptim += next_nll
 
-            professor_loss = llargs.c0 * loss0 +\
-                             llargs.c1 * loss1 +\
-                             llargs.c2 * loss2
+            professor_loss = llargs.c0 * loss0 + \
+                llargs.c1 * loss1 + \
+                llargs.ccos * losscos + \
+                llargs.c2 * loss2 + \
+                llargs.coptim * lossoptim
 
             ll_losses.append(professor_loss.item())
-                    
+
             # -- Perform backpropagation
 
             avg_nll.backward(retain_graph=llargs.full_grad)
@@ -284,7 +325,7 @@ def run(args: Namespace):
             if args.debug:
                 print("[DEBUG]", loss0.item(), loss1.item(), loss2.item())
                 # print([p.grad.abs().max().item() for p in loss_learner.parameters()])
-            
+
             if seen_examples - last_seen >= args.log_interval:
                 print(f"[Train] #{(epoch + 1):d} "
                       f"[{seen_examples:d}/{total_examples:d}"
@@ -298,13 +339,14 @@ def run(args: Namespace):
             if seen_examples - last_eval >= args.eval_interval:
                 test(task_model, device, test_loader)
                 task_model.train()
-                if args.evaluation.random_params:
-                    start_params = OrderedDict([(name, t.clone()) for (name, t)
+                if not args.evaluation.random_params:
+                    start_params = OrderedDict([(name, t.clone().detach()) for (name, t)
                                                 in state_dict.items()])
                 else:
                     start_params = None
 
                 score = test_professor(loss_learner, device, test_loader, args, state_dict=start_params)
+                print(f"[*****] Fitness = {score:.2f}")
                 scores.append(score)
                 last_eval += args.eval_interval
 
@@ -313,12 +355,11 @@ def run(args: Namespace):
         task_model.train()
         score = test_professor(loss_learner, device, test_loader, args)
         scores.append(score)
-            
 
     print(f"Final score: {np.mean(scores):.3f}")
 
-    with open(os.path.join(args.out_dir, "fitness"), "w") as f:
-        f.write(f"{np.mean(scores):f}\n")
+    with open(os.path.join(args.out_dir, "fitness"), "w") as handler:
+        handler.write(f"{np.mean(scores):f}\n")
 
     return np.mean(scores)
 
@@ -327,8 +368,7 @@ def run(args: Namespace):
 
 def main() -> None:
     # Reading args
-    import os.path
-    import os
+    from time import time
     from liftoff.config import read_config
 
     args = read_config()  # type: Args
@@ -346,6 +386,7 @@ def main() -> None:
         args.run_id = 0
 
     run(args)
+
 
 if __name__ == "__main__":
     main()
