@@ -50,8 +50,8 @@ loss_learning:
 evaluation:
   random_params: no
   teaching_steps: 2000
-  teaching_eval_freq: 50
+  teaching_eval_freq: 100
 
 
-log_interval: 10240
-eval_interval: 60000
+log_interval: 60000
+eval_interval: 600000

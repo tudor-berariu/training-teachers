@@ -366,7 +366,7 @@ def run(args: Namespace):
         score = test_professor(loss_learner, device, test_loader, args)
         scores.append(score)
     elif found_nan:
-        scores = [.0]
+        scores = [-1]
 
     print(f"Final score: {np.mean(scores):.3f}")
 
