@@ -1,0 +1,109 @@
+batch_size:
+  gtype: ptwo
+  min_power: 6
+  max_power: 9
+
+c_l2:
+  gtype: number
+  precision: 1
+  positive: yes
+  avoid_zero: no
+  min_order: -5
+  max_order: -3
+  
+
+reset_student:
+  gtype: number
+  precision: 2
+  positive: yes
+  avoid_zero: no
+  min_order: 4
+  max_order: 4
+
+loss_learning:
+
+  c_nll:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 0
+
+  c_kl:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 0
+
+  c_grad:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 2
+    
+  c_cos:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 0
+
+  c_optim:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -4
+    max_order: 0
+
+  c_hess:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -6
+    max_order: -2
+
+  c_d:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 0
+
+  optimizer:
+    name:
+      gtype: set
+      domain:
+        - Adam
+        - SGD
+    nesterov:
+      gtype: set
+      domain:
+        - True
+        - False
+    momentum:
+      gtype: number
+      precision: 2
+      positive: yes
+      avoid_zero: yes
+      min_order: -2
+      max_order: -2
+
+constraints:
+  loss_learning.optimizer.name:
+    Adam:
+      - loss_learning.optimizer.momentum: delete
+      - loss_learning.optimizer.nesterov: delete
+
+
+meta:
+  steps: 5000
+  selection: squared_rank

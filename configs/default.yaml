@@ -21,9 +21,11 @@ student_optimizers:
   - name: SGD
     lr: 0.001
   - name: Adam
-    lr: 0.0001
+    lr: 0.001
 
 l2: 0.2
+
+professor_type: parameter
 
 loss_learning:
   nprofessors: 5
@@ -38,7 +40,7 @@ loss_learning:
   param_samples: 12
   noise_intensity: .01
   noise_type: absolute
-  full_grad: yes
+  full_grad: no
   sobolev_depth: 2
   optim_loss: yes
   c0: 1.0
@@ -54,4 +56,4 @@ evaluation:
 
 
 log_interval: 60000
-eval_interval: 60000
+eval_interval: 600000
