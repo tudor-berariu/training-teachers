@@ -137,3 +137,4 @@ constraints:
 meta:
   steps: 5000
   selection: squared_rank
+  drop_below_zero: yes
