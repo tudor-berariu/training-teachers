@@ -20,6 +20,12 @@ reset_student:
   min_order: 4
   max_order: 4
 
+nstudents:
+  gtype: set
+  domain:
+    - 1
+    - 5
+
 loss_learning:
 
   data_generator:
