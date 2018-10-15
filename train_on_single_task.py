@@ -12,7 +12,7 @@ import torch.optim as optim
 
 from liftoff.config import dict_to_namespace
 
-from utils import get_kwargs, get_optimizer
+from utils import get_kwargs, get_optimizer, print_nparams
 from loss_utils import l2
 from models import classifiers
 from tasks.datasets import get_loaders
@@ -25,11 +25,6 @@ def get_model(module, model_args, *args, **kwargs):
     print("[MAIN_] The arguments for the", clr(model_args.name, 'red'),
           "model: ", cfgargs)
     return getattr(module, model_args.name)(*args, **cfgargs, **kwargs)
-
-
-def print_nparams(model: nn.Module, name: str = "Model") -> None:
-    nparams = sum(p.nelement() for p in model.parameters())
-    print(f"[MAIN_] {name:s} has {clr(f'{nparams:d}', 'yellow'):s} params.")
 
 
 def test(model, device, test_loader, verbose=True):
@@ -61,7 +56,7 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
     all_accs = []  # For all optimizers
     for run_no in range(args.evaluation.nstudents):
         student = get_model(classifiers, args.student,
-                            nin=(1, 32, 32), nout=10).to(device)
+                            in_size=(1, 32, 32), nclasses=10).to(device)
         if state_dict is not None:
             student.load_state_dict(state_dict)
         student_optimizer = get_optimizer(student.parameters(),
@@ -115,7 +110,7 @@ def run(args: Namespace):
     for _idx in range(args.nstudents):
         # TODO: change nin and nout when changing datasets
         student = get_model(classifiers, args.student,
-                            nin=(1, 32, 32), nout=10).to(device)
+                            in_size=(1, 32, 32), nclasses=10).to(device)
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
         students.append(student)
@@ -135,6 +130,8 @@ def run(args: Namespace):
     if not hasattr(llargs, "debug"):
         llargs.debug = args.debug
     llargs.c_l2 = args.c_l2
+    llargs.in_size = (1, 32, 32)
+    llargs.nclasses = 10
 
     if args.professor_type == "generative":
         from agents.generative_agent import GenerativeAgent
@@ -144,15 +141,13 @@ def run(args: Namespace):
         agent = None
         raise NotImplementedError
 
-    print_nparams(agent.professor, name="Professor")
-
     for student in students:
         student.train()
 
     seen_examples = 0
 
     scores = []
-    last_seen, last_eval = 0, 0
+    last_seen, last_student_eval, last_professor_eval = 0, 0, 0
     found_nan = False
 
     student_trace = []
@@ -212,9 +207,12 @@ def run(args: Namespace):
                 professor_trace.clear()
                 last_seen += args.log_interval
 
-            if seen_examples - last_eval >= args.eval_interval:
+            if seen_examples - last_student_eval >= args.student_eval_interval:
                 test(students[0], device, test_loader)
                 students[0].train()
+                last_student_eval += args.student_eval_interval
+
+            if seen_examples - last_professor_eval >= args.professor_eval_interval:
                 if not args.evaluation.random_params:
                     start_params = OrderedDict([(name, t.clone().detach()) for (name, t)
                                                 in state_dict.items()])
@@ -225,20 +223,29 @@ def run(args: Namespace):
                                        state_dict=start_params)
                 print(f"[*****] Fitness = {score:.2f}")
                 scores.append(score)
-                last_eval += args.eval_interval
-
-        test(students[0], device, test_loader)
-        students[0].train()
+                last_professor_eval += args.professor_eval_interval
 
         if found_nan:
             print("Found NaN.")
             break
 
-    if not found_nan and seen_examples > last_eval:
-        test(student, device, test_loader)
-        score = test_professor(agent, device, test_loader, args)
+    if not found_nan and seen_examples > last_student_eval:
+        test(students[0], device, test_loader)
+        students[0].train()
+
+    if not found_nan and seen_examples > last_professor_eval:
+        if not args.evaluation.random_params:
+            start_params = OrderedDict([(name, t.clone().detach()) for (name, t)
+                                        in state_dict.items()])
+        else:
+            start_params = None
+
+        score = test_professor(agent, device, test_loader, args,
+                               state_dict=start_params)
+        print(f"[*****] Fitness = {score:.2f}")
         scores.append(score)
-    elif found_nan:
+
+    if found_nan:
         scores = [-1.0]
 
     print(f"Final score: {np.mean(scores):.3f}")

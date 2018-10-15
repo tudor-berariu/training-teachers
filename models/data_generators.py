@@ -1,45 +1,13 @@
-from argparse import Namespace
+from typing import Tuple
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from models import Student, Professor
-from utils import get_kwargs
-
-
-class GenerativeProfessor(Professor):
-    def __init__(self, llargs: Namespace) -> None:
-        super(GenerativeProfessor, self).__init__()
-        data_generator_cfg = llargs.data_generator
-        DataGenerator = eval(data_generator_cfg.name)
-        self.professor = DataGenerator(**get_kwargs(data_generator_cfg))
-        self.crt_device = None
-        self.eval_samples = llargs.eval_samples
-
-    def forward(self, targets):
-        return self.professor(targets)
-
-    def eval_student(self, student: Student) -> torch.Tensor:
-        if self.eval_samples is not None:
-            target = torch.randint(10, (self.eval_samples,)).long()
-            if self.crt_device:
-                target = target.to(self.crt_device)
-        else:
-            target = None
-        data, target = self.professor(targets=target)
-        output = student(data)
-        return F.cross_entropy(output, target)
-
-    def to(self, device):
-        self.crt_device = device
-        self.professor.to(device)
-        return super(GenerativeProfessor, self).to(device)
 
 
 class SyntheticDataGenerator(nn.Module):
-    def __init__(self, nz: int, ngf: int,
-                 nclasses: int=10, nc: int=1) -> None:
+    def __init__(self, in_size: Tuple[int, int, int], nclasses: int,
+                 nz: int, ngf: int) -> None:
         super(SyntheticDataGenerator, self).__init__()
+        nc, _, _ = in_size
         self.data_net = nn.Sequential(
             # input is Z, going into a convolution
             nn.ConvTranspose2d(nz + nclasses, ngf * 4, 4, 1, 0, bias=False),
@@ -67,13 +35,34 @@ class SyntheticDataGenerator(nn.Module):
         self.classeye = self.classeye.to(device)
         return super(SyntheticDataGenerator, self).to(device)
 
-    def forward(self, targets: torch.Tensor=None):
+    def forward(self, targets: torch.Tensor = None, nsamples: int = None):
+        device = self.classeye.device
         if targets is None:
             targets = self.classrange
             cond = self.classeye
+        elif nsamples is not None:
+            targets = torch.randint(10, (nsamples,), device=device).long()
+            cond = self.classeye[targets]
         else:
             cond = self.classeye[targets]
         batch_size = cond.size(0)
         noise = torch.randn(batch_size, self.nz, device=cond.device)
         z = torch.cat((cond, noise), dim=1).unsqueeze(2).unsqueeze(3)
         return self.data_net(z), targets
+
+
+class SyntheticDataDiscriminator(nn.Module):
+
+    def __init__(self, nclasses: int):
+        super(SyntheticDataDiscriminator, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(nclasses * 2, 256),
+            nn.ReLU(),
+            nn.Linear(256, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, *args, **kwargs):
+        return self.model(*args, **kwargs)

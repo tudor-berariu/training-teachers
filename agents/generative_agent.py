@@ -9,9 +9,11 @@ import torch.nn.functional as F
 import torch.autograd as autograd
 
 from models import Student
-from models.data_generators import GenerativeProfessor
+from models.data_generators import SyntheticDataGenerator
+from models.data_generators import SyntheticDataDiscriminator
 from agents.learning_agent import LearningAgent
-from utils import get_optimizer
+
+from utils import get_optimizer, print_nparams, get_kwargs
 from loss_utils import cos, mse, l2
 
 
@@ -37,12 +39,18 @@ class GenerativeAgent(LearningAgent):
                  "retain_graph": True,
                  "only_inputs": True}
 
-    def __init__(self,
-                 students: List[Student],
-                 args: Namespace) -> None:
+    def __init__(self, students: List[Student], args: Namespace) -> None:
         self.students = students
-        self.professor = professor = GenerativeProfessor(args)
-        self.professor_optimizer = get_optimizer(professor.parameters(),
+        self.args = args
+        self.in_size = in_size = args.in_size
+        self.nclasses = nclasses = args.nclasses
+
+        DataGenerator = eval(args.data_generator.name)
+        self.generator = DataGenerator(in_size=in_size, nclasses=nclasses,
+                                       **get_kwargs(args.data_generator))
+        print_nparams(self.generator, name="Generator:0")
+
+        self.generator_optimizer = get_optimizer(self.generator.parameters(),
                                                  args.optimizer)
 
         self.c_nll = args.c_nll  # Coefficient for MSELoss between NLLs
@@ -55,40 +63,61 @@ class GenerativeAgent(LearningAgent):
         self.c_d = args.c_d  # Coefficient for the discriminator
         self.c_l2 = args.c_l2
 
-        if args.c_d > 0:
-            nclasses = 10  # TODO: change for other tasks
-            self.classeye = torch.eye(nclasses)
-            self.discriminator = discriminator = nn.Sequential(
-                nn.Linear(nclasses * 2, 256),
-                nn.ReLU(),
-                nn.Linear(256, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1),
-                nn.Sigmoid()
-            )
-            self.bce_loss = nn.BCELoss()
-            self.discriminator_optimizer = optim.Adam(discriminator.parameters(),
-                                                      lr=.001)
+        self.full_grad = args.full_grad
 
+        if args.c_d > 0:
+            self.classeye = torch.eye(nclasses)
+            self.discriminator = disc = SyntheticDataDiscriminator(nclasses)
+            self.bce_loss = nn.BCELoss()
+            self.discriminator_optimizer = optim.Adam(disc.parameters(), lr=.001)
+
+        self.old_generator = None
+        self.crt_device = None
+        self.eval_samples = args.eval_samples
         self.debug = args.debug
 
     def to(self, device):
-        self.professor.to(device)
+        self.crt_device = device
+        self.generator.to(device)
         if self.c_d > 0:
             self.discriminator.to(device)
             self.bce_loss.to(device)
             self.classeye = self.classeye.to(device)
+        if self.old_generator is not None:
+            self.old_generator.to(device)
 
-    def eval_student(self, student, **kwargs):
-        return self.professor.eval_student(student, **kwargs)
+    def eval_student(self, student: Student, nsamples: int = None) -> torch.Tensor:
+        if nsamples is None:
+            nsamples = self.eval_samples
+        data, target = self.generator(nsamples=nsamples)
+        output = student(data)
+        return F.cross_entropy(output, target)
 
-    def discriminate(self, real_output, fake_output, target) -> torch.Tensor:
-        cond = self.classeye[target]
-        outputs = torch.cat((torch.cat((real_output.detach(), cond), dim=1),
-                             torch.cat((fake_output, cond), dim=1)), dim=0)
-        targets = torch.cat((torch.zeros_like(target),
-                             torch.ones_like(target)), dim=0)
-        return self.bce_loss(self.discriminator(outputs), targets.detach())
+    def end_task(self, is_last: bool = False) -> None:
+        if is_last:
+            return
+
+        args = self.args
+        self.old_generator = self.generator
+        self.old_generator.eval()
+        del self.generator_optimizer
+
+        data_generator_cfg = args.data_generator
+        DataGenerator = eval(data_generator_cfg.name)
+        self.generator = DataGenerator(**get_kwargs(data_generator_cfg))
+        print_nparams(self.generator, name="Generator")
+
+        if self.crt_device:
+            self.generator.to(self.crt_device)
+        self.generator_optimizer = get_optimizer(self.generator.parameters(),
+                                                 args.optimizer)
+        if args.c_d > 0:
+            del self.discriminator
+            del self.discriminator_optimizer
+            nclasses = self.nclasses
+            self.classeye = torch.eye(nclasses)
+            self.discriminator = disc = SyntheticDataDiscriminator(nclasses)
+            self.discriminator_optimizer = optim.Adam(disc.parameters(), lr=.001)
 
     def process(self, data, target) -> Tuple[List[float], Dict[str, float]]:
         c_nll, c_kl = self.c_nll, self.c_kl
@@ -97,27 +126,37 @@ class GenerativeAgent(LearningAgent):
         c_l2 = self.c_l2
         c_d = self.c_d
 
-        student_loss = 0
+        nstudents = len(self.students)
+
         student_losses = []
-        professor_loss = 0
-        professor_losses = OrderedDict({})
+        generator_losses = OrderedDict({})
 
         for coeff_name, loss_name in GenerativeAgent.LOSSES.items():
             if getattr(self, coeff_name) > 0:
-                professor_losses[loss_name] = 0
+                generator_losses[loss_name] = 0
 
         # --- Here it starts ---
 
-        fake_data, _target = self.professor(target)
+        # -- Distil old generator in current one?
+
+        if self.old_generator is not None:
+            with torch.no_grad:
+                prev_data, prev_target = self.old_generator(nsamples=len(data))
+            data = torch.cat((data, prev_data.detach()), dim=0)
+            target = torch.cat((target, prev_target.detach()), dim=0)
+
+        # -- Generate data and apply costs
+
+        fake_data, _target = self.generator(target)
         real_outputs, fake_outputs = dict({}), dict({})
 
         if self.c_d > 0:
-            professor_losses["Discriminator BCE - real"] = 0
-            professor_losses["Discriminator BCE - fake"] = 0
-            professor_losses["Discriminator BCE - gen "] = 0
-            professor_losses["Discriminator avg - real"] = 0
-            professor_losses["Discriminator avg - fake"] = 0
-            professor_losses["Discriminator avg - gen "] = 0
+            generator_losses["Discriminator BCE - real"] = 0
+            generator_losses["Discriminator BCE - fake"] = 0
+            generator_losses["Discriminator BCE - gen "] = 0
+            generator_losses["Discriminator avg - real"] = 0
+            generator_losses["Discriminator avg - fake"] = 0
+            generator_losses["Discriminator avg - gen "] = 0
             label = self.classeye[target]
             discriminator_loss = 0
             self.discriminator_optimizer.zero_grad()
@@ -139,15 +178,17 @@ class GenerativeAgent(LearningAgent):
 
                 discriminator_loss += loss_real + loss_fake
 
-                professor_losses["Discriminator BCE - real"] += loss_real.item()
-                professor_losses["Discriminator avg - real"] += d_real_out.mean().item()
+                generator_losses["Discriminator BCE - real"] += loss_real.item()
+                generator_losses["Discriminator avg - real"] += d_real_out.mean().item()
 
-                professor_losses["Discriminator BCE - fake"] += loss_fake.item()
-                professor_losses["Discriminator avg - fake"] += d_fake_out.mean().item()
+                generator_losses["Discriminator BCE - fake"] += loss_fake.item()
+                generator_losses["Discriminator avg - fake"] += d_fake_out.mean().item()
 
             (discriminator_loss / len(self.students)).backward()
             self.discriminator_optimizer.step()
 
+        self.generator.zero_grad()
+        optimize_generator = False
         for s_idx, student in enumerate(self.students):
             if self.c_d > 0:
                 real_output = real_outputs[s_idx]
@@ -159,28 +200,28 @@ class GenerativeAgent(LearningAgent):
             fake_nlls = F.cross_entropy(fake_output, target, reduction="none")
 
             # Student's negative log likelihood on the real data
-            s_loss = real_nll = real_nlls.mean()
+            student_loss = real_nll = real_nlls.mean()
             if c_l2 > 0:
-                s_loss = s_loss + l2(student.parameters()) * c_l2
+                student_loss = student_loss + l2(student.parameters()) * c_l2
+            student_losses.append(student_loss.item())
 
-            student_loss += s_loss
-            student_losses.append(s_loss.item())
+            professor_loss = 0
 
             # Error in induced losses
             if c_nll > 0:
                 # MSE between fake_nlls and real_nlls
                 nll_loss = F.mse_loss(fake_nlls, real_nlls.detach()) * c_nll
                 professor_loss += nll_loss
-                professor_losses["NLL"] += nll_loss.item()
+                generator_losses["NLL"] += nll_loss.item()
 
             # -- Error in KL between outputs --
             if c_kl > 0:
                 # KL between fake_outputs and real_outputs
-                target_p = F.softmax(real_output).detach()
+                target_p = F.softmax(real_output, dim=1).detach()
                 fake_logp = F.log_softmax(fake_output, dim=1)
                 kldiv = F.kl_div(fake_logp, target_p) * c_kl
                 professor_loss += kldiv
-                professor_losses["KLdiv"] = kldiv.item()
+                generator_losses["KLdiv"] = kldiv.item()
 
             if c_grad > 0 or c_cos > 0 or c_hess > 0 or c_optim > 0:
                 grad_pairs = []
@@ -208,7 +249,7 @@ class GenerativeAgent(LearningAgent):
                     grad_loss += mse(fake_g, real_g)
                 grad_loss *= c_grad / ngrads
                 professor_loss += grad_loss
-                professor_losses["GradMSE"] += grad_loss.item()
+                generator_losses["GradMSE"] += grad_loss.item()
 
             # -- Cosine distance between induced gradients --
 
@@ -218,7 +259,7 @@ class GenerativeAgent(LearningAgent):
                     cos_loss += cos(fake_grads, real_grads)
                 cos_loss *= c_cos / ngrads
                 professor_loss += cos_loss
-                professor_losses["GradCos"] += cos_loss.item()
+                generator_losses["GradCos"] += cos_loss.item()
 
             # -- Cross-entropy of displaced parameters --
 
@@ -239,7 +280,7 @@ class GenerativeAgent(LearningAgent):
 
                 optim_loss *= c_optim / ngrads
                 professor_loss += optim_loss
-                professor_losses["NextNLL"] += optim_loss.item()
+                generator_losses["NextNLL"] += optim_loss.item()
 
             # -- MSError between Hessian-vector products --
 
@@ -256,7 +297,7 @@ class GenerativeAgent(LearningAgent):
 
                 hess_loss *= c_hess / ngrads
                 professor_loss += hess_loss
-                professor_losses["HessVecMSE"] += hess_loss.item()
+                generator_losses["HessVecMSE"] += hess_loss.item()
 
             if c_d > 0:
 
@@ -264,42 +305,40 @@ class GenerativeAgent(LearningAgent):
                 d_gen_out = self.discriminator(d_gen_in)
                 d_gen_loss = self.bce_loss(d_gen_out, ones_for_d)
                 professor_loss += d_gen_loss * c_d
-                professor_losses["Discriminator BCE - gen "] += d_gen_loss.item()
-                professor_losses["Discriminator avg - gen "] += d_gen_out.mean().item()
+                generator_losses["Discriminator BCE - gen "] += d_gen_loss.item()
+                generator_losses["Discriminator avg - gen "] += d_gen_out.mean().item()
 
             # -- Backward now so we won't keep to much memory? Not for now
+
+            if torch.is_tensor(professor_loss):
+                if torch.is_tensor(professor_loss):
+                    if torch.isnan(professor_loss).any().item():
+                        return None, None
+                optimize_generator = True
+                professor_loss /= nstudents
+                professor_loss.backward(retain_graph=True)
+
+            # -- Perform backpropagation through current student --
+
+            if not self.full_grad:
+                student.zero_grad()
+            student_loss.backward()
 
             # -- here ENDs computation fo current student
 
         # -- If there is some loss, improve teacher
 
-        if torch.is_tensor(professor_loss):
-            if torch.isnan(professor_loss).any().item():
-                return None, None
-
-            # Normalize this w.r.t. the number of students
-
-            nstudents = float(len(self.students))
-            professor_loss /= nstudents
-            for key in professor_losses.keys():
-                professor_losses[key] /= nstudents
-
-            self.professor_optimizer.zero_grad()
-            professor_loss.backward()
-
+        if optimize_generator:
             if self.debug:
                 pg_ratio = []
-                for p in self.professor.parameters():
-                    pg_ratio.append(f"{(p.data / p.grad.data).abs().mean().item():.2f}")
+                for param in self.generator.parameters():
+                    ratio = (param.data / param.grad.data).abs().mean().item()
+                    pg_ratio.append(f"{ratio:.2f}")
                 print(pg_ratio)
 
-            self.professor_optimizer.step()
+            self.generator_optimizer.step()
 
-        # -- Perform backpropagation through students
+        for key in generator_losses.keys():
+            generator_losses[key] /= nstudents
 
-        for student in self.students:
-            student.zero_grad()
-
-        student_loss.backward()
-
-        return student_losses, professor_losses
+        return student_losses, generator_losses

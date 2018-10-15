@@ -2,6 +2,12 @@ from typing import Iterator, List, Tuple, Union
 from argparse import Namespace
 from termcolor import colored as clr
 import torch.optim as optim
+import torch.nn as nn
+
+
+def print_nparams(model: nn.Module, name: str = "Model") -> None:
+    nparams = sum(p.nelement() for p in model.parameters())
+    print(f"[MODEL] {name:s} has {clr(f'{nparams:d}', 'yellow'):s} params.")
 
 
 def get_optimizer(parameters, opt_args: Namespace) -> optim.Optimizer:

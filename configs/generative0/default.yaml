@@ -1,9 +1,9 @@
 debug: no
 no_cuda: no
-epochs_no: 100
+epochs_no: 50
 log_interval: 10000
 student_eval_interval: 60000
-professor_eval_interval: 60000
+professor_eval_interval: 300000
 
 batch_size: 256
 test_batch_size: 10000
@@ -33,16 +33,16 @@ loss_learning:
   data_generator:
     name: SyntheticDataGenerator
     nz: 64
-    ngf: 16
+    ngf: 8
 
   c_nll: 1
   c_kl: 1
   c_grad: 1
   c_cos: 1
   batch_grad: False
-  c_optim: 0
-  c_hess: 0
-  c_d: 0
+  c_optim: 1
+  c_hess: 0.0001
+  c_d: 1
 
   full_grad: no
 
