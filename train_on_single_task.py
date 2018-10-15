@@ -197,7 +197,7 @@ def run(args: Namespace):
 
             if seen_examples - last_seen >= args.log_interval:
                 details = [("Epoch", epoch + 1),
-                           ("Progress", 100. * (batch_idx + 1) / len(train_loader)),
+                           ("Progress (%)", 100. * (batch_idx + 1) / len(train_loader)),
                            ("Student 0", np.mean(student_trace)),
                            ("All students", np.mean(all_students_trace))]
                 details.extend([(n, np.mean(vals)) for (n, vals) in professor_trace.items()])

@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from typing import Dict, List, Tuple
 from argparse import Namespace
+from tabulate import tabulate
 
 import torch
 import torch.nn as nn
@@ -140,7 +141,7 @@ class GenerativeAgent(LearningAgent):
         # -- Distil old generator in current one?
 
         if self.old_generator is not None:
-            with torch.no_grad:
+            with torch.no_grad():
                 prev_data, prev_target = self.old_generator(nsamples=len(data))
             data = torch.cat((data, prev_data.detach()), dim=0)
             target = torch.cat((target, prev_target.detach()), dim=0)
@@ -330,11 +331,15 @@ class GenerativeAgent(LearningAgent):
 
         if optimize_generator:
             if self.debug:
-                pg_ratio = []
-                for param in self.generator.parameters():
-                    ratio = (param.data / param.grad.data).abs().mean().item()
-                    pg_ratio.append(f"{ratio:.2f}")
-                print(pg_ratio)
+                tuples = []
+                with torch.no_grad():
+                    for name, param in self.generator.named_parameters():
+                        p_mean = param.data.abs().mean().item()
+                        g_mean = param.grad.data.abs().mean().item()
+                        pg_ratio = param.data.abs() / (param.grad.data.abs() + 1e-9)
+                        pg_ratio = pg_ratio.mean().item()
+                        tuples.append((name, p_mean, g_mean, pg_ratio))
+                print(tabulate(tuples))
 
             self.generator_optimizer.step()
 
