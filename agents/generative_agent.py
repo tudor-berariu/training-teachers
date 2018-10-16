@@ -33,6 +33,7 @@ class GenerativeAgent(LearningAgent):
                           "c_grad": "GradMSE",
                           "c_cos": "GradCos",
                           "c_optim": "NextNLL",
+                          "c_next_kl": "Next KLdiv",
                           "c_hess": "HessVecMSE",
                           "c_d": "Discriminator"})
 
@@ -60,6 +61,7 @@ class GenerativeAgent(LearningAgent):
         self.c_cos = args.c_cos  # Coefficient for the cos between gradients
         self.batch_grad = args.batch_grad  # Compute gradient w.r.t. full batch
         self.c_optim = args.c_optim  # Coefficient for the nll of moved params
+        self.c_next_kl = args.c_next_kl
         self.c_hess = args.c_hess  # Coefficient for the MSE between Hv prods
         self.c_d = args.c_d  # Coefficient for the discriminator
         self.c_l2 = args.c_l2
@@ -123,6 +125,7 @@ class GenerativeAgent(LearningAgent):
     def process(self, data, target) -> Tuple[List[float], Dict[str, float]]:
         c_nll, c_kl = self.c_nll, self.c_kl
         c_grad, c_cos, c_optim = self.c_grad, self.c_cos, self.c_optim
+        c_next_kl = self.c_next_kl
         c_hess = self.c_hess
         c_l2 = self.c_l2
         c_d = self.c_d
@@ -222,7 +225,7 @@ class GenerativeAgent(LearningAgent):
                 fake_logp = F.log_softmax(fake_output, dim=1)
                 kldiv = F.kl_div(fake_logp, target_p) * c_kl
                 professor_loss += kldiv
-                generator_losses["KLdiv"] = kldiv.item()
+                generator_losses["KLdiv"] += kldiv.item()
 
             if c_grad > 0 or c_cos > 0 or c_hess > 0 or c_optim > 0:
                 grad_pairs = []
@@ -282,6 +285,29 @@ class GenerativeAgent(LearningAgent):
                 optim_loss *= c_optim / ngrads
                 professor_loss += optim_loss
                 generator_losses["NextNLL"] += optim_loss.item()
+
+            # -- Cross-entropy of displaced parameters --
+
+            if c_next_kl > 0:
+                next_kldiv = 0
+                for _real_grads, fake_grads, mask in grad_pairs:
+                    new_params = OrderedDict({})
+                    pg_pairs = zip(student.named_parameters(), fake_grads)
+                    for (name, param), grad in pg_pairs:
+                        new_params[name] = param.detach() + grad
+                    if mask is None:
+                        new_output = student(data, params=new_params)
+                        target_p = F.softmax(real_output, dim=1).detach()
+                        fake_next_logp = F.log_softmax(new_output, dim=1)
+                        next_kldiv += F.kl_div(fake_next_logp, target_p)
+                    else:
+                        new_output = student(data_i[mask], params=new_params)
+                        target_p = F.softmax(real_output[mask], dim=1).detach()
+                        fake_next_logp = F.log_softmax(new_output, dim=1)
+                        next_kldiv += F.kl_div(fake_next_logp, target_p)
+                next_kldiv *= c_next_kl
+                professor_loss += next_kldiv
+                generator_losses["Next KLdiv"] += kldiv.item()
 
             # -- MSError between Hessian-vector products --
 

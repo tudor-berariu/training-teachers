@@ -63,7 +63,7 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
                                           args.student_optimizer)
         start_acc = test(student, device, test_loader, verbose=False)
 
-        print(f"[TEACH]", end="")
+        print(f"[TEACH] start={start_acc:.2f} ->> ", end="")
         for step in range(args.evaluation.teaching_steps):
             student_optimizer.zero_grad()
             synthetic_loss = agent.eval_student(student)
