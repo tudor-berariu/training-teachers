@@ -227,7 +227,7 @@ class GenerativeAgent(LearningAgent):
                 professor_loss += kldiv
                 generator_losses["KLdiv"] += kldiv.item()
 
-            if c_grad > 0 or c_cos > 0 or c_hess > 0 or c_optim > 0:
+            if c_grad > 0 or c_cos > 0 or c_hess > 0 or c_optim > 0 or c_next_kl:
                 grad_pairs = []
                 if self.batch_grad:
                     real_g = grad_of(real_nll, student.parameters())
@@ -273,7 +273,7 @@ class GenerativeAgent(LearningAgent):
                     new_params = OrderedDict({})
                     pg_pairs = zip(student.named_parameters(), fake_grads)
                     for (name, param), grad in pg_pairs:
-                        new_params[name] = param.detach() + grad
+                        new_params[name] = param.detach() - .001 * grad
                     if mask is None:
                         new_output = student(data, params=new_params)
                         optim_loss += F.cross_entropy(new_output, target)
@@ -294,20 +294,20 @@ class GenerativeAgent(LearningAgent):
                     new_params = OrderedDict({})
                     pg_pairs = zip(student.named_parameters(), fake_grads)
                     for (name, param), grad in pg_pairs:
-                        new_params[name] = param.detach() + grad
+                        new_params[name] = param.detach() - .001 * grad
                     if mask is None:
                         new_output = student(data, params=new_params)
                         target_p = F.softmax(real_output, dim=1).detach()
                         fake_next_logp = F.log_softmax(new_output, dim=1)
                         next_kldiv += F.kl_div(fake_next_logp, target_p)
                     else:
-                        new_output = student(data_i[mask], params=new_params)
+                        new_output = student(data[mask], params=new_params)
                         target_p = F.softmax(real_output[mask], dim=1).detach()
                         fake_next_logp = F.log_softmax(new_output, dim=1)
                         next_kldiv += F.kl_div(fake_next_logp, target_p)
                 next_kldiv *= c_next_kl
                 professor_loss += next_kldiv
-                generator_losses["Next KLdiv"] += kldiv.item()
+                generator_losses["Next KLdiv"] += next_kldiv.item()
 
             # -- MSError between Hessian-vector products --
 
