@@ -107,10 +107,12 @@ def run(args: Namespace):
     # -- Student model and optimizer
 
     students, student_optimizers = [], []
-    for _idx in range(args.nstudents):
+    for idx in range(args.nstudents):
         # TODO: change nin and nout when changing datasets
         student = get_model(classifiers, args.student,
                             in_size=(1, 32, 32), nclasses=10).to(device)
+        if idx > 1 and not args.evaluation.random_params:
+            student.load_state_dict(students[0].state_dict())
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
         students.append(student)
@@ -123,7 +125,8 @@ def run(args: Namespace):
         state_dict = OrderedDict([(name, t.clone()) for (name, t)
                                   in students[0].state_dict().items()])
         print("[MAIN_] Saved initial parameters of student 0.")
-
+    else:
+        state_dict = None
     # -- Loss learning
 
     llargs = args.loss_learning
@@ -190,7 +193,10 @@ def run(args: Namespace):
                 if np.random.sample() < p_reset:
                     idx = np.random.randint(1, args.nstudents)
                     print("[MAIN_] Reset student", idx)
-                    students[idx].reset_weights()
+                    if not args.evaluation.random_params:
+                        students[idx].load_state_dict(state_dict)
+                    else:
+                        students[idx].reset_weights()
                     new_optimizer = get_optimizer(students[idx].parameters(),
                                                   args.student_optimizer)
                     student_optimizers[idx] = new_optimizer
