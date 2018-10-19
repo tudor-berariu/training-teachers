@@ -1,21 +1,24 @@
 debug: no
 no_cuda: no
-epochs_no: 100
-log_interval: 10000
+epochs_no: 200
+log_interval: 12800
 student_eval_interval: 60000
-professor_eval_interval: 60000
+professor_eval_interval: 300000
 
-batch_size: 256
+batch_size: 128
 test_batch_size: 10000
 in_size: [1, 32, 32]
 
+random_params: yes
 nstudents: 5
+random_students: yes
+
 student:
   name: ConvNet
-  channels: [32, 32]
-  units: [200]
+  channels: [16, 32]
+  units: [100]
   use_bias: False
-  use_dropout: False
+  use_dropout: True
 
 student_optimizer:
   name: Adam
@@ -25,26 +28,34 @@ student_optimizer:
 c_l2: .0005
 
 professor_type: generative
-reset_student: 60000
-
+reset_student: 10000
 
 loss_learning:
   debug: no
-  data_generator:
-    name: SyntheticDataGenerator
-    nz: 64
+
+  encoder:
+    name: Encoder
+  generator:
+    name: Generator
     ngf: 16
+  discriminator:
+    name: OutputDiscriminator
+
+  nz: 32
 
   c_nll: 1
   c_kl: 1
-  c_grad: 1
-  c_cos: 1
-  batch_grad: False
-  c_optim: 0
-  c_hess: 0
-  c_d: 0
+  c_grad_mse: 1
+  c_grad_cos: 0
+  c_next_nll: 0
+  c_hess: .001
+  c_d: 1
+  c_next_kl: 0
+  c_recon: 0
+  c_latent_kl: 1
 
-  full_grad: no
+  grad_type: class
+  next_lr: .001
 
   optimizer:
     name: Adam
@@ -55,7 +66,6 @@ loss_learning:
   eval_samples: 128
 
 evaluation:
-  random_params: yes
-  nstudents: 5
-  teaching_steps: 2500
-  teaching_eval_freq: 125
+  nstudents: 1
+  teaching_steps: 1500
+  teaching_eval_freq: 25

@@ -2,6 +2,7 @@ from functools import reduce
 from operator import mul
 from typing import List, Tuple
 from collections import OrderedDict
+import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -9,6 +10,22 @@ import torch.nn.functional as F
 
 
 # TODO: add batch normalization
+
+
+def sample_classifier(in_size: Tuple[int, int, int], nclasses: int,
+                      max_convs: int=2, max_channels: int=32,
+                      max_linears: int=2, max_units: int=256):
+    conv_no = np.random.randint(0, max_convs + 1)
+    max_pow = int(np.log2(max_channels)) + 1
+    channels = [2 ** np.random.randint(0, max_pow) for _ in range(conv_no)]
+    fc_no = np.random.randint(0, max_linears)
+    max_pow = int(np.log2(max_units)) + 1
+    units = [2 ** np.random.randint(0, max_pow) for _ in range(fc_no)]
+
+    use_dropout = bool(np.random.choice([True, False]))
+    return ConvNet(in_size, nclasses, channels=channels, units=units,
+                   use_bias=False, use_dropout=use_dropout)
+
 
 class ConvNet(nn.Module):
 

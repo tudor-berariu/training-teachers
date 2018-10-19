@@ -1,6 +1,7 @@
-from typing import Iterator, List, Tuple, Union
+from typing import List, Tuple, Union
 from argparse import Namespace
 from termcolor import colored as clr
+import torch
 import torch.optim as optim
 import torch.nn as nn
 
@@ -15,6 +16,19 @@ def get_optimizer(parameters, opt_args: Namespace) -> optim.Optimizer:
     print("[MAIN_] The arguments for the", clr(opt_args.name, 'red'),
           "optimizer: ", cfgargs)
     return getattr(optim, opt_args.name)(parameters, **cfgargs)
+
+
+def grad_info(model: nn.Module) -> List[Tuple[str, float, float, float]]:
+    tuples = []
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            abs_param = param.data.abs()
+            abs_grad = param.grad.data.abs()
+            param_mean = abs_param.mean().item()
+            grad_mean = abs_grad.mean().item()
+            ratio = (abs_param / (abs_grad + 1e-9)).mean().item()
+            tuples.append((name, param_mean, grad_mean, ratio))
+    return tuples
 
 
 def get_kwargs(args: Union[Namespace, dict],

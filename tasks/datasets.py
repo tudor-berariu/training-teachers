@@ -113,4 +113,4 @@ def get_loaders(batch_size: int,
         train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True)
         test_loader = InMemoryDataLoader(test_loader, test_batch_size)
 
-    return train_loader, test_loader
+    return train_loader, test_loader, (in_size, 10, (mean, std))

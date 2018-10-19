@@ -6,26 +6,20 @@ from termcolor import colored as clr
 import numpy as np
 
 import torch
-import torch.nn as nn
+from torch import Tensor
 import torch.nn.functional as F
-import torch.optim as optim
 
-from liftoff.config import dict_to_namespace
-
-from utils import get_kwargs, get_optimizer, print_nparams
+from utils import get_optimizer, print_nparams, grad_info
 from loss_utils import l2
+from models import get_model
 from models import classifiers
+from models.classifiers import sample_classifier
 from tasks.datasets import get_loaders
 
 
-# -- Loading a model or an optimizer
-
-def get_model(module, model_args, *args, **kwargs):
-    cfgargs = get_kwargs(model_args)
-    print("[MAIN_] The arguments for the", clr(model_args.name, 'red'),
-          "model: ", cfgargs)
-    return getattr(module, model_args.name)(*args, **cfgargs, **kwargs)
-
+# -----------------------------------------------------------------------------
+#
+# Test a given student on the test data, returns the accuracy.
 
 def test(model, device, test_loader, verbose=True):
     model.eval()
@@ -49,11 +43,15 @@ def test(model, device, test_loader, verbose=True):
                   f"({accuracy:.2f}%)", "red"))
     return accuracy
 
-# -- Professor evaluation
+
+# -----------------------------------------------------------------------------
+#
+# Test a given professor by optimizing a few students from random
+# parameters.
 
 
 def test_professor(agent, device, test_loader, args, state_dict=None):
-    all_accs = []  # For all optimizers
+    all_accs = []
     for run_no in range(args.evaluation.nstudents):
         student = get_model(classifiers, args.student,
                             in_size=(1, 32, 32), nclasses=10).to(device)
@@ -66,24 +64,45 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
         print(f"[TEACH] start={start_acc:.2f} ->> ", end="")
         for step in range(args.evaluation.teaching_steps):
             student_optimizer.zero_grad()
-            synthetic_loss = agent.eval_student(student)
+            synthetic_loss, synthetic_acc = agent.eval_student(student)
             if args.c_l2 > 0:
                 l2_loss = l2(student.parameters()) * args.c_l2
-                synthetic_loss += l2_loss
-            synthetic_loss.backward()
+                full_loss = synthetic_loss + l2_loss
+            else:
+                full_loss = synthetic_loss
+            full_loss.backward()
             student_optimizer.step()
             if (step + 1) % args.evaluation.teaching_eval_freq == 0:
                 acc = test(student, device, test_loader, verbose=False)
                 acc -= start_acc
                 student.train()
                 all_accs.append(acc)
-                print(f" {acc:.1f}%", end="")
+                print(f"[{step:d}] Synthetic NLL: {synthetic_loss.item():.3f}; " +
+                      f"L2: {l2_loss.item():3f}; Synthetic acc: {synthetic_acc:.2f}; " +
+                      clr(f"Acc: {acc:.1f}%", "yellow"))
         print(" !")
 
     final_score = np.mean(all_accs)
     print(clr(f"[TEACH_] Final score = {final_score:.3f}", "yellow"))
 
     return final_score
+
+
+def get_n_samples(data_loader, nsamples: int) -> Tensor:
+    iter_data = iter(data_loader)
+    data = None
+    while data is None or len(data) < nsamples:
+        try:
+            more_data, _ = next(iter_data)
+        except StopIteration:
+            iter_data = iter(data_loader)
+            more_data, _ = next(iter_data)
+        more_data = more_data[:nsamples - (0 if data is None else len(data))]
+        if data is None:
+            data = more_data.clone()
+        else:
+            data = torch.cat((data, more_data), dim=0)
+    return data
 
 
 def run(args: Namespace):
@@ -95,12 +114,16 @@ def run(args: Namespace):
     print(f"[MAIN_] Using device {device}.")
 
     # -- Task configuration
-    train_loader, test_loader = get_loaders(args.batch_size,
-                                            args.test_batch_size,
-                                            use_cuda=use_cuda,
-                                            in_size=tuple(args.in_size))
+    train_loader, test_loader, info = get_loaders(args.batch_size,
+                                                  args.test_batch_size,
+                                                  use_cuda=use_cuda,
+                                                  in_size=tuple(args.in_size))
     train_loader.to(device)
     test_loader.to(device)
+
+    some_batch = get_n_samples(train_loader, nsamples=32)
+
+    in_size, nclasses, nrmlz = info
 
     print("[MAIN_] We haz data loaders.")
 
@@ -108,11 +131,14 @@ def run(args: Namespace):
 
     students, student_optimizers = [], []
     for idx in range(args.nstudents):
-        # TODO: change nin and nout when changing datasets
-        student = get_model(classifiers, args.student,
-                            in_size=(1, 32, 32), nclasses=10).to(device)
-        if idx > 1 and not args.evaluation.random_params:
-            student.load_state_dict(students[0].state_dict())
+        if idx == 0 or not args.random_students:
+            student = get_model(classifiers, args.student,
+                                in_size=in_size,
+                                nclasses=nclasses).to(device)
+            if idx > 0 and not args.random_params:
+                student.load_state_dict(students[0].state_dict())
+        else:
+            student = sample_classifier(in_size, nclasses).to(device)
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
         students.append(student)
@@ -121,7 +147,7 @@ def run(args: Namespace):
 
     print("[MAIN_] Initialized", len(students), "students.")
 
-    if not args.evaluation.random_params:
+    if not args.random_params:
         state_dict = OrderedDict([(name, t.clone()) for (name, t)
                                   in students[0].state_dict().items()])
         print("[MAIN_] Saved initial parameters of student 0.")
@@ -166,17 +192,15 @@ def run(args: Namespace):
             for student_optimizer in student_optimizers:
                 student_optimizer.zero_grad()
 
-            student_losses, professor_losses = agent.process(data, target)
+            student_losses, professor_losses = agent.process(data, target, nrmlz)
 
             if student_losses is None:
                 found_nan = True
                 break
 
             if args.debug:
-                pg_ratio = []
-                for p in students[0].parameters():
-                    pg_ratio.append(f"{(p.data / (p.grad.data + 1e-9)).abs().mean().item():.2f}")
-                print(pg_ratio)
+                print("[MAIN_][DEBUG] Student 0:")
+                print(tabulate(grad_info(students[0])))
 
             for student_optimizer in student_optimizers:
                 student_optimizer.step()
@@ -193,10 +217,15 @@ def run(args: Namespace):
                 if np.random.sample() < p_reset:
                     idx = np.random.randint(1, args.nstudents)
                     print("[MAIN_] Reset student", idx)
-                    if not args.evaluation.random_params:
-                        students[idx].load_state_dict(state_dict)
+
+                    if not args.random_params:
+                        student[idx].load_state_dict(state_dict)
+                    elif args.random_students:
+                        students[idx] = sample_classifier(in_size, nclasses).to(device)
                     else:
-                        students[idx].reset_weights()
+                        students[idx] = get_model(classifiers, args.student,
+                                                  in_size=in_size,
+                                                  nclasses=nclasses).to(device)
                     new_optimizer = get_optimizer(students[idx].parameters(),
                                                   args.student_optimizer)
                     student_optimizers[idx] = new_optimizer
@@ -219,7 +248,7 @@ def run(args: Namespace):
                 last_student_eval += args.student_eval_interval
 
             if seen_examples - last_professor_eval >= args.professor_eval_interval:
-                if not args.evaluation.random_params:
+                if not args.random_params:
                     start_params = OrderedDict([(name, t.clone().detach()) for (name, t)
                                                 in state_dict.items()])
                 else:
@@ -235,12 +264,14 @@ def run(args: Namespace):
             print("Found NaN.")
             break
 
+        agent.save_state(args.out_dir, epoch, data=some_batch)
+
     if not found_nan and seen_examples > last_student_eval:
         test(students[0], device, test_loader)
         students[0].train()
 
     if not found_nan and seen_examples > last_professor_eval:
-        if not args.evaluation.random_params:
+        if not args.random_params:
             start_params = OrderedDict([(name, t.clone().detach()) for (name, t)
                                         in state_dict.items()])
         else:
