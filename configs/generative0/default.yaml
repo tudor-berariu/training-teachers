@@ -10,7 +10,7 @@ test_batch_size: 10000
 in_size: [1, 32, 32]
 
 random_params: yes
-nstudents: 4
+nstudents: 3
 random_students: yes
 reset_student: 10000
 
@@ -69,6 +69,6 @@ loss_learning:
   eval_samples: 128
 
 evaluation:
-  nstudents: 3
+  nstudents: 5
   teaching_steps: 1500
   teaching_eval_freq: 25

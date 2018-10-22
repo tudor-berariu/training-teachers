@@ -1,33 +1,40 @@
-batch_size: 512
 c_l2:
-- 1
-- -5
-nstudents: 1
-loss_learning.c_cos:
-- 1
-- 0
+- 5
+- -4
 loss_learning.c_d:
 - 0
 - 0
-loss_learning.c_grad:
-- 0
+loss_learning.c_grad_cos:
 - 1
+- 0
+loss_learning.c_grad_mse:
+- 0
+- 0
 loss_learning.c_hess:
 - 0
-- -5
+- -4
 loss_learning.c_kl:
 - 0
+- 0
+loss_learning.c_latent_kl:
 - 1
+- 0
+loss_learning.c_next_nll:
+- 0
+- 0
 loss_learning.c_nll:
 - 0
 - 0
-loss_learning.c_optim:
+loss_learning.c_recon:
 - 0
-- -3
-loss_learning.data_generator.ngf: 8
+- 0
+loss_learning.generator.ngf: 16
 loss_learning.optimizer.momentum: delete
 loss_learning.optimizer.name: Adam
 loss_learning.optimizer.nesterov: delete
+meta:
+  source: sample
+nstudents: 5
 reset_student:
-- 24
+- 30
 - 4

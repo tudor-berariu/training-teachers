@@ -88,6 +88,14 @@ loss_learning:
     min_order: -3
     max_order: 0
 
+  c_recon:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: no
+    min_order: -3
+    max_order: 0
+
   c_latent_kl:
     gtype: number
     precision: 1
