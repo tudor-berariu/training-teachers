@@ -10,12 +10,15 @@ test_batch_size: 10000
 in_size: [1, 32, 32]
 
 random_params: yes
-nstudents: 5
+nstudents: 4
 random_students: yes
+
+tasks:
+  - FashionMNIST
 
 student:
   name: ConvNet
-  channels: [16, 32]
+  channels: [32, 32]
   units: [100]
   use_bias: False
   use_dropout: True
@@ -43,16 +46,16 @@ loss_learning:
 
   nz: 32
 
-  c_nll: 1
+  c_nll: 0
   c_kl: 1
-  c_grad_mse: 1
+  c_grad_mse: 0
   c_grad_cos: 0
   c_next_nll: 0
-  c_hess: .001
-  c_d: 1
+  c_hess: 0
+  c_d: 0
   c_next_kl: 0
   c_recon: 0
-  c_latent_kl: 1
+  c_latent_kl: .001
 
   grad_type: class
   next_lr: .001
@@ -66,6 +69,6 @@ loss_learning:
   eval_samples: 128
 
 evaluation:
-  nstudents: 1
+  nstudents: 3
   teaching_steps: 1500
   teaching_eval_freq: 25

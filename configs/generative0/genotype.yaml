@@ -1,17 +1,3 @@
-batch_size:
-  gtype: ptwo
-  min_power: 6
-  max_power: 9
-
-c_l2:
-  gtype: number
-  precision: 1
-  positive: yes
-  avoid_zero: no
-  min_order: -5
-  max_order: -3
-  
-
 reset_student:
   gtype: number
   precision: 2
@@ -24,11 +10,22 @@ nstudents:
   gtype: set
   domain:
     - 1
+    - 3
     - 5
+    - 7
+    - 9
+
+c_l2:
+  gtype: number
+  precision: 1
+  positive: yes
+  avoid_zero: no
+  min_order: -5
+  max_order: -3
 
 loss_learning:
 
-  data_generator:
+  generator:
     ngf:
       gtype: set
       domain:
@@ -51,7 +48,7 @@ loss_learning:
     min_order: -3
     max_order: 0
 
-  c_grad:
+  c_grad_mse:
     gtype: number
     precision: 1
     positive: yes
@@ -59,7 +56,7 @@ loss_learning:
     min_order: -3
     max_order: 2
     
-  c_cos:
+  c_grad_cos:
     gtype: number
     precision: 1
     positive: yes
@@ -67,7 +64,7 @@ loss_learning:
     min_order: -3
     max_order: 0
 
-  c_optim:
+  c_next_nll:
     gtype: number
     precision: 1
     positive: yes
@@ -89,6 +86,14 @@ loss_learning:
     positive: yes
     avoid_zero: no
     min_order: -3
+    max_order: 0
+
+  c_latent_kl:
+    gtype: number
+    precision: 1
+    positive: yes
+    avoid_zero: yes
+    min_order: -4
     max_order: 0
 
   optimizer:
