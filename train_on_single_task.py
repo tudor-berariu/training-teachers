@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 
-from utils import get_optimizer, print_nparams, grad_info
+from utils import get_optimizer, print_nparams, grad_info, print_conf
 from loss_utils import l2
 from models import get_model
 from models import classifiers
@@ -21,11 +21,12 @@ from tasks.datasets import get_loaders
 #
 # Test a given student on the test data, returns the accuracy.
 
-def test(model, device, test_loader, verbose=True):
+def test(model, device, test_loader, verbose=True, do_conf=False):
     model.eval()
     test_loss = .0
     correct = 0
     total = 0
+    conf = None
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
@@ -33,15 +34,27 @@ def test(model, device, test_loader, verbose=True):
             test_loss += F.cross_entropy(output, target).item() * len(data)
             pred = output.max(1, keepdim=True)[1]
             correct += pred.eq(target.view_as(pred)).sum().item()
+            if do_conf:
+                if conf is None:
+                    nclasses = output.size(1)
+                    conf = torch.zeros(nclasses, nclasses, device=device)
+                conf.put_(target * output.size(1) + pred.squeeze(),
+                          torch.ones(target.size(), device=device),
+                          accumulate=True)
             total += len(data)
 
     test_loss /= total
     accuracy = (100. * correct / total)
+    if do_conf:
+        conf = conf / conf.sum(dim=1, keepdim=True) * 100
+
     if verbose:
         print(clr(f"[TEST_] Avg. loss = {test_loss:.4f} | "
                   f"Acccuracy = {correct:d} / {total:d} "
                   f"({accuracy:.2f}%)", "red"))
-    return accuracy
+        if do_conf:
+            print_conf(conf.cpu())
+    return accuracy, conf
 
 
 # -----------------------------------------------------------------------------
@@ -59,7 +72,7 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
             student.load_state_dict(state_dict)
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
-        start_acc = test(student, device, test_loader, verbose=False)
+        start_acc, _ = test(student, device, test_loader, verbose=False)
 
         print(f"[TEACH] start={start_acc:.2f} ->> ", end="")
         for step in range(args.evaluation.teaching_steps):
@@ -73,36 +86,43 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
             full_loss.backward()
             student_optimizer.step()
             if (step + 1) % args.evaluation.teaching_eval_freq == 0:
-                acc = test(student, device, test_loader, verbose=False)
+                is_last_step = (step + 1) == args.evaluation.teaching_steps
+                kwargs = {"verbose": False, "do_conf": is_last_step}
+                acc, conf = test(student, device, test_loader, **kwargs)
                 acc -= start_acc
                 student.train()
                 all_accs.append(acc)
-                print(f"[{step:d}] Synthetic NLL: {synthetic_loss.item():.3f}; " +
-                      f"L2: {l2_loss.item():3f}; Synthetic acc: {synthetic_acc:.2f}; " +
+                print(f"[{run_no:d}][{step:d}] "
+                      f"Synthetic NLL: {synthetic_loss.item():.3f}; "
+                      f"L2: {l2_loss.item():3f}; "
+                      f"Synthetic acc: {synthetic_acc:.2f}; " +
                       clr(f"Acc: {acc:.1f}%", "yellow"))
-        print(" !")
+                if is_last_step:
+                    print_conf(conf)
 
     final_score = np.mean(all_accs)
-    print(clr(f"[TEACH_] Final score = {final_score:.3f}", "yellow"))
+    print(clr(f"[TEACH_] >>> Final score = {final_score:.3f} <<<", "yellow"))
 
     return final_score
 
 
 def get_n_samples(data_loader, nsamples: int) -> Tensor:
     iter_data = iter(data_loader)
-    data = None
+    data, target = None, None
     while data is None or len(data) < nsamples:
         try:
-            more_data, _ = next(iter_data)
+            more_data, more_target = next(iter_data)
         except StopIteration:
             iter_data = iter(data_loader)
-            more_data, _ = next(iter_data)
-        more_data = more_data[:nsamples - (0 if data is None else len(data))]
+            more_data, more_target = next(iter_data)
+        end = nsamples - (0 if data is None else len(data))
+        more_data, more_target = more_data[:end],  more_target[:end]
         if data is None:
-            data = more_data.clone()
+            data, target = more_data, more_target
         else:
             data = torch.cat((data, more_data), dim=0)
-    return data
+            target = torch.cat((target, more_target), dim=0)
+    return {"data": data.clone(), "target": target.clone()}
 
 
 def run(args: Namespace):
@@ -192,7 +212,7 @@ def run(args: Namespace):
             for student_optimizer in student_optimizers:
                 student_optimizer.zero_grad()
 
-            student_losses, professor_losses = agent.process(data, target, nrmlz)
+            student_losses, prof_losses = agent.process(data, target, nrmlz)
 
             if student_losses is None:
                 found_nan = True
@@ -207,7 +227,7 @@ def run(args: Namespace):
 
             student_trace.append(student_losses[0])
             all_students_trace.extend(student_losses)
-            for name, value in professor_losses.items():
+            for name, value in prof_losses.items():
                 professor_trace.setdefault(name, []).append(value)
 
             seen_examples += len(data)
@@ -243,7 +263,7 @@ def run(args: Namespace):
                 last_seen += args.log_interval
 
             if seen_examples - last_student_eval >= args.student_eval_interval:
-                test(students[0], device, test_loader)
+                test(students[0], device, test_loader, do_conf=True)
                 students[0].train()
                 last_student_eval += args.student_eval_interval
 
@@ -264,7 +284,7 @@ def run(args: Namespace):
             print("Found NaN.")
             break
 
-        agent.save_state(args.out_dir, epoch, data=some_batch)
+        agent.save_state(args.out_dir, epoch, **some_batch)
 
     if not found_nan and seen_examples > last_student_eval:
         test(students[0], device, test_loader)

@@ -147,7 +147,8 @@ class GenerativeAgent(LearningAgent):
         with torch.no_grad():
             mean, log_var = encoder(data)
             fake_data, _target = generator(target, mean=mean, log_var=log_var)
-            save_image((fake_data.cpu() + 1) / 2,
+            all_data = torch.cat((data, fake_data), dim=0).cpu()
+            save_image(all_data,
                        os.path.join(out_path, f"recons_{epoch_no:04d}.png"))
 
     def end_task(self, is_last: bool = False) -> None:
@@ -393,6 +394,10 @@ class GenerativeAgent(LearningAgent):
             if self.debug:
                 generator_info = grad_info(generator)
                 print(tabulate(generator_info))
+
+                if encoder is not None:
+                    encoder_info = grad_info(encoder)
+                    print(tabulate(encoder_info))
 
             for key in info.keys():
                 info[key] /= nstudents

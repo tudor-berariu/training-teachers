@@ -1,9 +1,25 @@
 from typing import List, Tuple, Union
 from argparse import Namespace
 from termcolor import colored as clr
+import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn as nn
+
+
+def print_conf(conf):
+    conf = conf.tolist()
+    print("   " + "  ".join(f"{i: 7d}" for i in range(len(conf))))
+    for i, row in enumerate(conf):
+        max_on_row = np.max(row)
+        faces = []
+        for j, cell in enumerate(row):
+            face = f"{cell: 6.2f}%"
+            if max_on_row - cell < 5.:
+                face = clr(face, "yellow" if i == j else "red")
+            faces.append(face)
+        str_row = f"{i: 2d} " + "  ".join(faces)
+        print(str_row)
 
 
 def print_nparams(model: nn.Module, name: str = "Model") -> None:
