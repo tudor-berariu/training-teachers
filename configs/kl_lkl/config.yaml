@@ -1,0 +1,16 @@
+nstudents:
+  - 3
+  - 6
+  - 9
+
+loss_learning:
+  c_kl:
+    - 10
+    - 1
+
+  c_latent_kl:
+    - 1
+    - 0.1
+    - 0.01
+    - 0.001
+    - 0.0001

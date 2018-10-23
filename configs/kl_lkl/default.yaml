@@ -1,0 +1,75 @@
+debug: no
+no_cuda: no
+epochs_no: 200
+log_interval: 12800
+student_eval_interval: 60000
+professor_eval_interval: 240000
+
+batch_size: 128
+test_batch_size: 10000
+in_size: [1, 32, 32]
+
+random_params: yes
+nstudents: 5
+random_students: yes
+
+tasks:
+  - FashionMNIST
+
+student:
+  name: ConvNet
+  channels: [32, 32]
+  units: [100]
+  use_bias: False
+  use_dropout: True
+
+student_optimizer:
+  name: Adam
+  lr: 0.001
+  nesterov: delete
+
+c_l2: .0005
+
+professor_type: generative
+reset_student: 12800
+
+loss_learning:
+  debug: no
+
+  encoder:
+    name: Encoder
+  generator:
+    name: Generator
+    ngf: 16
+  discriminator:
+    name: OutputDiscriminator
+
+  nz: 64
+
+  c_nll: 0
+  c_kl: 1
+  c_grad_mse: 0
+  c_grad_cos: 0
+  c_next_nll: 0
+  c_hess: 0
+  c_d: 0
+  c_next_kl: 0
+  c_recon: 0
+  c_latent_kl: 1
+
+  grad_type: example
+  grad_samples: 20
+  next_lr: .001
+
+  optimizer:
+    name: Adam
+    lr: .001
+    nesterov: delete
+    momentum: delete
+
+  eval_samples: 128
+
+evaluation:
+  nstudents: 1
+  teaching_steps: 2000
+  teaching_eval_freq: 25
