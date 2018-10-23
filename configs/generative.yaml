@@ -3,14 +3,14 @@ no_cuda: no
 epochs_no: 200
 log_interval: 12800
 student_eval_interval: 60000
-professor_eval_interval: 300000
+professor_eval_interval: 240000
 
 batch_size: 128
 test_batch_size: 10000
 in_size: [1, 32, 32]
 
 random_params: yes
-nstudents: 4
+nstudents: 5
 random_students: yes
 
 tasks:
@@ -31,7 +31,7 @@ student_optimizer:
 c_l2: .0005
 
 professor_type: generative
-reset_student: 10000
+reset_student: 12800
 
 loss_learning:
   debug: no
@@ -44,7 +44,7 @@ loss_learning:
   discriminator:
     name: OutputDiscriminator
 
-  nz: 32
+  nz: 64
 
   c_nll: 0
   c_kl: 1
@@ -55,9 +55,12 @@ loss_learning:
   c_d: 0
   c_next_kl: 0
   c_recon: 0
-  c_latent_kl: .001
+  c_latent_kl: 1
 
-  grad_type: class
+  target_dropout: .5
+
+  grad_type: example
+  grad_samples: 20
   next_lr: .001
 
   optimizer:
@@ -69,6 +72,6 @@ loss_learning:
   eval_samples: 128
 
 evaluation:
-  nstudents: 3
-  teaching_steps: 1500
+  nstudents: 1
+  teaching_steps: 2000
   teaching_eval_freq: 25

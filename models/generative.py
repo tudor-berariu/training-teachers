@@ -54,10 +54,13 @@ class Generator(nn.Module):
     def forward(self, target: torch.Tensor = None,
                 nsamples: int = None,
                 mean: torch.Tensor = None,
-                log_var: torch.Tensor = None):
+                log_var: torch.Tensor = None,
+                tmask: torch.Tensor = None):
         device = self.classeye.device
         if target is not None:
             cond = self.classeye[target]
+            if tmask is not None:
+                cond *= tmask.unsqueeze(1)
         elif nsamples is not None:
             target = torch.randint(10, (nsamples,), device=device).long()
             cond = self.classeye[target]
@@ -72,7 +75,7 @@ class Generator(nn.Module):
         noise = torch.randn(batch_size, self.nz, device=cond.device)
         if mean is not None and log_var is not None:
             noise = noise * torch.exp(.5 * log_var) + mean
-        z = torch.cat((cond, noise), dim=1).unsqueeze(2).unsqueeze(3)
+        z = torch.cat((cond.detach(), noise), dim=1).unsqueeze(2).unsqueeze(3)
         x = self.generator(z).view(-1, 1, 32, 32)
 
         return torch.tanh(x), target

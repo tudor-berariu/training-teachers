@@ -66,6 +66,7 @@ class GenerativeAgent(LearningAgent):
         self.coeffs.c_l2 = args.c_l2
         self.coeffs.c_latent_kl = args.c_latent_kl
         self.coeffs.next_lr = args.next_lr
+        self.coeffs.target_dropout = args.target_dropout
 
         w_grad = ["grad_mse", "grad_cos", "next_kl", "next_nll", "hess"]
         self.need_grad = any(getattr(coeffs, "c_" + n) > 0 for n in w_grad)
@@ -224,11 +225,19 @@ class GenerativeAgent(LearningAgent):
         #
         # Generate data for current task
 
+        if coeffs.target_dropout > 0:
+            tmask = torch.bernoulli(torch.full(target.size(),
+                                               coeffs.target_dropout))
+            tmask = tmask.to(target.device)
+        else:
+            tmask = None
+
         if encoder is not None:
             mean, log_var = encoder(data)
-            fake_data, _target = generator(target, mean=mean, log_var=log_var)
+            fake_data, _target = generator(target, mean=mean, log_var=log_var,
+                                           tmask=tmask)
         else:
-            fake_data, _target = generator(target)
+            fake_data, _target = generator(target, tmask=tmask)
 
         # -----------------------------------------------------------------
         #
