@@ -1,4 +1,5 @@
 import os
+import pickle
 from argparse import Namespace
 from collections import OrderedDict
 from tabulate import tabulate
@@ -206,6 +207,7 @@ def run(args: Namespace):
     student_trace = []
     all_students_trace = []
     professor_trace = OrderedDict({})
+    professor_avg_trace = dict({})
 
     reset_students = args.nstudents > 1 and args.reset_student > 0
 
@@ -266,6 +268,10 @@ def run(args: Namespace):
                 print(tabulate(details))
                 student_trace.clear()
                 all_students_trace.clear()
+                professor_avg_trace.setdefault("seen", []).append(seen_examples)
+                for info, values in professor_trace.items():
+                    professor_avg_trace.setdefault(info, []).append(np.mean(values))
+
                 professor_trace.clear()
                 last_seen += args.log_interval
 
@@ -300,6 +306,8 @@ def run(args: Namespace):
             break
 
         agent.save_state(args.out_dir, epoch, **some_batch)
+        with open(os.path.join(args.out_dir, f"trace_{epoch:04d}.th"), 'wb') as handle:
+            pickle.dump(professor_avg_trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     if not found_nan and seen_examples > last_student_eval:
         test(students[0], device, test_loader)
