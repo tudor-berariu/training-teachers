@@ -200,7 +200,7 @@ def run(args: Namespace):
 
     seen_examples = 0
 
-    best_fitness, best_epoch, scores = None, None, []
+    best_fitness, best_epoch, scores, scores_at = None, None, [], []
     last_seen, last_student_eval, last_professor_eval = 0, 0, 0
     found_nan, should_stop = False, False
 
@@ -290,6 +290,7 @@ def run(args: Namespace):
                 score = test_professor(agent, device, test_loader, args,
                                        state_dict=start_params)
                 scores.append(score)
+                scores_at.append(seen_examples)
                 if len(scores) >= 10:
                     new_avg = np.mean(scores[-10:])
                     if best_fitness is None or new_avg > best_fitness:
@@ -306,8 +307,11 @@ def run(args: Namespace):
             break
 
         agent.save_state(args.out_dir, epoch, **some_batch)
-        with open(os.path.join(args.out_dir, f"trace_{epoch:04d}.th"), 'wb') as handle:
+        with open(os.path.join(args.out_dir, f"trace.th"), 'wb') as handle:
             pickle.dump(professor_avg_trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
+            pickle.dump({"scores": scores, "seen": scores_at},
+                        handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     if not found_nan and seen_examples > last_student_eval:
         test(students[0], device, test_loader)
@@ -323,10 +327,15 @@ def run(args: Namespace):
         score = test_professor(agent, device, test_loader, args,
                                state_dict=start_params)
         scores.append(score)
+        scores_at.append(seen_examples)
         if len(scores) >= 10:
             new_avg = np.mean(scores[-10:])
             if best_fitness is None or new_avg > best_fitness:
                 best_fitness, best_epoch = new_avg, len(scores)
+
+        with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
+            pickle.dump({"scores": scores, "seen": scores_at},
+                        handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     if found_nan:
         fitness = -1.0
