@@ -65,17 +65,18 @@ def test(model, device, test_loader, verbose=True, do_conf=False):
 
 def test_professor(agent, device, test_loader, args, state_dict=None):
     all_accs = []
+    nsteps = args.evaluation.teaching_steps
     for run_no in range(args.evaluation.nstudents):
+        print(f"[TEACH] Teaching student {run_no + 1:d}.")
         student = get_model(classifiers, args.student,
-                            in_size=(1, 32, 32), nclasses=10).to(device)
+                            in_size=args.in_size,
+                            nclasses=args.nclasses).to(device)
+        print_nparams(student, name=f"Student #{run_no + 1:d}")
         if state_dict is not None:
             student.load_state_dict(state_dict)
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
-        start_acc, _ = test(student, device, test_loader, verbose=False)
-
-        print(f"[TEACH] start={start_acc:.2f} ->> ", end="")
-        for step in range(args.evaluation.teaching_steps):
+        for step in range(nsteps):
             student_optimizer.zero_grad()
             synthetic_loss, synthetic_acc = agent.eval_student(student)
             if args.c_l2 > 0:
@@ -89,19 +90,19 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
                 is_last_step = (step + 1) == args.evaluation.teaching_steps
                 kwargs = {"verbose": False, "do_conf": is_last_step}
                 acc, conf = test(student, device, test_loader, **kwargs)
-                acc -= start_acc
                 student.train()
                 all_accs.append(acc)
-                print(f"[{run_no:d}][{step:d}] "
-                      f"Synthetic NLL: {synthetic_loss.item():.3f}; "
-                      f"L2: {l2_loss.item():3f}; "
+                l2s = "" if l2_loss is None else f"L2: {l2_loss.item():3f}; "
+                print(f"[TEACH][{run_no + 1:d}][{step + 1: 3d}/{nsteps:d}] "
+                      f"Synthetic NLL: {synthetic_loss.item():.3f}; " + l2s +
                       f"Synthetic acc: {synthetic_acc:.2f}; " +
                       clr(f"Acc: {acc:.1f}%", "yellow"))
                 if is_last_step:
                     print_conf(conf)
-
+    if len(all_accs) > 25:
+        all_accs = all_accs[-25:]
     final_score = np.mean(all_accs)
-    print(clr(f"[TEACH_] >>> Final score = {final_score:.3f} <<<", "yellow"))
+    print(clr(f"[TEACH] >>> Final score = {final_score:.3f} <<<", "yellow"))
 
     return final_score
 
@@ -116,7 +117,7 @@ def get_n_samples(data_loader, nsamples: int) -> Tensor:
             iter_data = iter(data_loader)
             more_data, more_target = next(iter_data)
         end = nsamples - (0 if data is None else len(data))
-        more_data, more_target = more_data[:end],  more_target[:end]
+        more_data, more_target = more_data[:end], more_target[:end]
         if data is None:
             data, target = more_data, more_target
         else:
@@ -126,6 +127,7 @@ def get_n_samples(data_loader, nsamples: int) -> Tensor:
 
 
 def run(args: Namespace):
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
     # -- Initialize device and random number generator
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -144,6 +146,8 @@ def run(args: Namespace):
     some_batch = get_n_samples(train_loader, nsamples=32)
 
     in_size, nclasses, nrmlz = info
+    args.in_size = in_size
+    args.nclasses = nclasses
 
     print("[MAIN_] We haz data loaders.")
 
@@ -195,9 +199,9 @@ def run(args: Namespace):
 
     seen_examples = 0
 
-    scores = []
+    best_fitness, best_epoch, scores = None, None, []
     last_seen, last_student_eval, last_professor_eval = 0, 0, 0
-    found_nan = False
+    found_nan, should_stop = False, False
 
     student_trace = []
     all_students_trace = []
@@ -215,7 +219,8 @@ def run(args: Namespace):
             student_losses, prof_losses = agent.process(data, target, nrmlz)
 
             if student_losses is None:
-                found_nan = True
+                print(clr("[MAIN_] Found NaN. Early stopping.", "red"))
+                found_nan = should_stop = True
                 break
 
             if args.debug:
@@ -241,11 +246,13 @@ def run(args: Namespace):
                     if not args.random_params:
                         student[idx].load_state_dict(state_dict)
                     elif args.random_students:
-                        students[idx] = sample_classifier(in_size, nclasses).to(device)
+                        students[idx] = sample_classifier(in_size,
+                                                          nclasses).to(device)
                     else:
                         students[idx] = get_model(classifiers, args.student,
                                                   in_size=in_size,
                                                   nclasses=nclasses).to(device)
+                    agent.init_student(students[idx], args.student_optimizer)
                     new_optimizer = get_optimizer(students[idx].parameters(),
                                                   args.student_optimizer)
                     student_optimizers[idx] = new_optimizer
@@ -276,12 +283,20 @@ def run(args: Namespace):
 
                 score = test_professor(agent, device, test_loader, args,
                                        state_dict=start_params)
-                print(f"[*****] Fitness = {score:.2f}")
                 scores.append(score)
+                if len(scores) >= 10:
+                    new_avg = np.mean(scores[-10:])
+                    if best_fitness is None or new_avg > best_fitness:
+                        best_fitness, best_epoch = new_avg, len(scores)
+
+                    if best_epoch + 5 < len(scores):
+                        print(clr("[MAIN_] Early stopping.", "red"))
+                        should_stop = True
+                        break
+
                 last_professor_eval += args.professor_eval_interval
 
-        if found_nan:
-            print("Found NaN.")
+        if should_stop:
             break
 
         agent.save_state(args.out_dir, epoch, **some_batch)
@@ -299,18 +314,25 @@ def run(args: Namespace):
 
         score = test_professor(agent, device, test_loader, args,
                                state_dict=start_params)
-        print(f"[*****] Fitness = {score:.2f}")
         scores.append(score)
+        if len(scores) >= 10:
+            new_avg = np.mean(scores[-10:])
+            if best_fitness is None or new_avg > best_fitness:
+                best_fitness, best_epoch = new_avg, len(scores)
 
     if found_nan:
-        scores = [-1.0]
+        fitness = -1.0
+    elif best_fitness is None:
+        fitness = np.mean(scores)
+    else:
+        fitness = best_fitness
 
-    print(f"Final score: {np.mean(scores):.3f}")
+    print(f"Final fitness: {fitness:.3f}")
 
     with open(os.path.join(args.out_dir, "fitness"), "w") as handler:
-        handler.write(f"{np.mean(scores):f}\n")
+        handler.write(f"{fitness:f}\n")
 
-    return np.mean(scores)
+    return fitness
 
 
 # -- The usual main function to be used with liftoff

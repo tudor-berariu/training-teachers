@@ -4,7 +4,7 @@ from typing import List
 import os.path
 from argparse import Namespace
 from tabulate import tabulate
-
+import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -36,7 +36,7 @@ def grad_of(outputs, inputs, grad_outputs=None):
 
 
 class GenerativeAgent(LearningAgent):
-    #pylint: disable=too-many-instance-attributes
+    # pylint: disable=too-many-instance-attributes
 
     def __init__(self, students: List[Student], args: Namespace) -> None:
         self.students = students
@@ -71,6 +71,10 @@ class GenerativeAgent(LearningAgent):
         self.need_grad = any(getattr(coeffs, "c_" + n) > 0 for n in w_grad)
         self.grad_type = args.grad_type
         assert self.grad_type in ["batch", "example", "class"]
+        if self.grad_type == "example":
+            self.grad_samples = args.grad_samples
+        else:
+            self.grad_samples = None
 
         self.old_generator = None
         self.crt_device = None
@@ -118,7 +122,9 @@ class GenerativeAgent(LearningAgent):
     def eval_student(self, student: Student, nsamples: int = None) -> Tensor:
         if nsamples is None:
             nsamples = self.eval_samples
-        data, target = self.generator(nsamples=nsamples)
+        with torch.no_grad():
+            data, target = self.generator(nsamples=nsamples)
+
         output = student(data)
 
         pred = output.max(1, keepdim=True)[1]
@@ -139,7 +145,7 @@ class GenerativeAgent(LearningAgent):
         # 2. generate_some_images
         with torch.no_grad():
             fake_data, _ = self.generator(nsamples=64)
-            save_image((fake_data.cpu() + 1) / 2,
+            save_image(fake_data.cpu(),
                        os.path.join(out_path, f"samples_{epoch_no:04d}.png"))
 
         # 3. save some comparisons
@@ -162,6 +168,36 @@ class GenerativeAgent(LearningAgent):
         self.generator_idx += 1
 
         self._create_components()
+
+    def init_student(self, student, optimizer_args, nsteps: int = None):
+        if nsteps is None:
+            nsteps = np.random.randint(1000)
+        nsamples = self.eval_samples
+        student_optimizer = get_optimizer(student.parameters(),
+                                          optimizer_args)
+        for _step in range(nsteps):
+            student_optimizer.zero_grad()
+            with torch.no_grad():
+                data, target = self.generator(nsamples=nsamples)
+            output = student(data)
+            loss = F.cross_entropy(output, target)
+            if self.coeffs.c_l2 > 0:
+                l2_loss = l2(student.parameters()) * self.coeffs.c_l2
+                loss = loss + l2_loss
+            loss.backward()
+            student_optimizer.step()
+
+        with torch.no_grad():
+            data, target = self.generator(nsamples=nsamples)
+            output = student(data)
+            loss = F.cross_entropy(output, target).item()
+            pred = output.max(1, keepdim=True)[1]
+            correct = pred.eq(target.view_as(pred)).sum().item()
+            acc = (correct / len(data) * 100)
+            print(f"[INIT_] Left student after {nsteps:d} steps "
+                  f"with Synthetic NLL={loss:.3f} and "
+                  f"Accuracy: {acc:.2f}%")
+        student.zero_grad()
 
     # pylint: disable=too-many-statements,too-many-branches,too-many-locals
     def process(self, data, target, nrmlz):
@@ -221,7 +257,16 @@ class GenerativeAgent(LearningAgent):
 
             del code, kld, recon_loss
 
-        for student in self.students:
+        # ---------------------------------------------------------------------
+        #
+        # If gradients are computed per example, we'll take a fixed
+        # number of samples for each student.
+
+        if self.grad_type == "example":
+            ngrad_samples = min(len(data), self.grad_samples)
+
+        nstudents = len(self.students)  # type: int
+        for sidx, student in enumerate(self.students):
 
             # -----------------------------------------------------------------
             #
@@ -231,6 +276,7 @@ class GenerativeAgent(LearningAgent):
 
             real_output = student(data)
             fake_output = student(fake_data)
+
             real_nlls = F.cross_entropy(real_output, target, reduction="none")
             fake_nlls = F.cross_entropy(fake_output, target, reduction="none")
 
@@ -255,8 +301,10 @@ class GenerativeAgent(LearningAgent):
             # fake, and real examples.
 
             if self.need_grad:
-                aligned_grads = self._get_aligned_grads(student, real_nlls,
-                                                        fake_nlls, target)
+                idxs = [i for i in range(ngrad_samples) if i % nstudents == sidx]
+                aligned_grads = self._get_aligned_grads(student,
+                                                        real_nlls, fake_nlls,
+                                                        target, idxs=idxs)
             # -----------------------------------------------------------------
             #
             # Start computing losses for the professor. Accumulate them in
@@ -456,7 +504,7 @@ class GenerativeAgent(LearningAgent):
         next_nll *= coeffs.c_next_nll / len(aligned_grads)
         return next_nll
 
-    def _get_aligned_grads(self, student, real_nlls, fake_nlls, target):
+    def _get_aligned_grads(self, student, real_nlls, fake_nlls, target, idxs=None):
         aligned_grads = []
         if self.grad_type == "batch":
             real_g = grad_of(real_nlls.mean(), student.parameters())
@@ -472,7 +520,9 @@ class GenerativeAgent(LearningAgent):
                     fake_g = grad_of(fake_nll_i, student.parameters())
                     aligned_grads.append((real_g, fake_g, mask))
         else:
-            for idx in range(len(target)):
+            if idxs is None:
+                idxs = range(len(target))
+            for idx in idxs:
                 real_g = grad_of(real_nlls[idx:idx + 1], student.parameters())
                 fake_g = grad_of(fake_nlls[idx:idx + 1], student.parameters())
                 aligned_grads.append((real_g, fake_g, slice(idx, idx+1)))
