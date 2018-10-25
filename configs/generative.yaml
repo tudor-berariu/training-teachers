@@ -48,9 +48,12 @@ loss_learning:
 
   c_nll: 0
   c_kl: 1
+  c_contrast_kl: 0.5
   c_grad_mse: 0
   c_grad_cos: 0
   c_next_nll: 0
+  c_contrast_next_nll: 0
+  c_next_nll2: 0
   c_hess: 0
   c_d: 0
   c_next_kl: 0

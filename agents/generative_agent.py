@@ -56,9 +56,12 @@ class GenerativeAgent(LearningAgent):
 
         self.coeffs.c_nll = args.c_nll
         self.coeffs.c_kl = args.c_kl
+        self.coeffs.c_contrast_kl = args.c_contrast_kl
         self.coeffs.c_grad_mse = args.c_grad_mse
         self.coeffs.c_grad_cos = args.c_grad_cos
         self.coeffs.c_next_nll = args.c_next_nll
+        self.coeffs.c_contrast_next_nll = args.c_contrast_next_nll
+        self.coeffs.c_next_nll2 = args.c_next_nll2
         self.coeffs.c_next_kl = args.c_next_kl
         self.coeffs.c_hess = args.c_hess
         self.coeffs.c_d = args.c_d
@@ -68,8 +71,27 @@ class GenerativeAgent(LearningAgent):
         self.coeffs.next_lr = args.next_lr
         self.coeffs.target_dropout = args.target_dropout
 
-        w_grad = ["grad_mse", "grad_cos", "next_kl", "next_nll", "hess"]
-        self.need_grad = any(getattr(coeffs, "c_" + n) > 0 for n in w_grad)
+        # ---------------------------------------------------------------------
+        #
+        # Let's check what needs to be computed (i.e. contrast data,
+        # gradinets)
+
+        def check_need(lst):
+            return any(getattr(coeffs, n) > 0 for n in lst)
+
+        w_contrast = ["c_contrast_kl", "c_contrast_next_nll"]
+        self.need_contrast = check_need(w_contrast)
+
+        w_real_grad = ["c_grad_mse", "c_grad_cos", "c_next_nll2", "c_hess"]
+        self.need_real_grad = check_need(w_real_grad)
+
+        w_fake_grad = ["c_grad_mse", "c_grad_cos", "c_next_nll", "c_next_kl",
+                       "c_hess"]
+        self.need_fake_grad = check_need(w_fake_grad)
+
+        w_contrast_grad = ["c_contrast_next_nll"]
+        self.need_contrast_grad = check_need(w_contrast_grad)
+
         self.grad_type = args.grad_type
         assert self.grad_type in ["batch", "example", "class"]
         if self.grad_type == "example":
@@ -77,7 +99,6 @@ class GenerativeAgent(LearningAgent):
         else:
             self.grad_samples = None
 
-        self.old_generator = None
         self.crt_device = None
         self.eval_samples = args.eval_samples
         self.debug = args.debug
@@ -239,6 +260,12 @@ class GenerativeAgent(LearningAgent):
         else:
             fake_data, _target = generator(target, tmask=tmask)
 
+        if self.need_contrast:
+            with torch.no_grad():
+                contrast_data, _target = generator(target)
+        else:
+            contrast_data = None
+
         # -----------------------------------------------------------------
         #
         # We erase gradients in both generator and encoder. If any
@@ -285,9 +312,18 @@ class GenerativeAgent(LearningAgent):
 
             real_output = student(data)
             fake_output = student(fake_data)
-
             real_nlls = F.cross_entropy(real_output, target, reduction="none")
             fake_nlls = F.cross_entropy(fake_output, target, reduction="none")
+
+            if self.need_contrast:
+                if self.need_contrast_grad:
+                    contrast_output = student(contrast_data)
+                    contrast_nlls = F.cross_entropy(contrast_output, target,
+                                                    reduction="none")
+                else:
+                    with torch.no_grad():
+                        contrast_output = student(contrast_data)
+                        contrast_nlls = None
 
             # -----------------------------------------------------------------
             #
@@ -309,10 +345,11 @@ class GenerativeAgent(LearningAgent):
             # Compute gradients w.r.t. student's parameters for both
             # fake, and real examples.
 
-            if self.need_grad:
+            if self.need_fake_grad or self.need_real_grad or self.need_contrast_grad:
                 idxs = [i for i in range(ngrad_samples) if i % nstudents == sidx]
                 aligned_grads = self._get_aligned_grads(student,
                                                         real_nlls, fake_nlls,
+                                                        contrast_nlls,
                                                         target, idxs=idxs)
             # -----------------------------------------------------------------
             #
@@ -344,6 +381,15 @@ class GenerativeAgent(LearningAgent):
                 kldiv = F.kl_div(fake_logp, real_p) * coeffs.c_kl
                 professor_loss += kldiv
                 info["KL div"] = info.get("KL div", 0) + kldiv.item()
+
+                if coeffs.c_contrast_kl > 0:
+                    contrast_p = F.softmax(contrast_output, dim=1).detach()
+                    contrast_kldiv = F.kl_div(fake_logp, contrast_p)
+                    contrast_kldiv *= coeffs.c_kl * coeffs.c_contrast_kl
+                    professor_loss -= contrast_kldiv
+                    info["KL div - contr"] = info.get("KL div - contr", 0) +\
+                        contrast_kldiv.item()
+
                 del fake_logp, real_p, kldiv
 
             # -----------------------------------------------------------------
@@ -352,7 +398,7 @@ class GenerativeAgent(LearningAgent):
 
             if coeffs.c_grad_mse > 0:
                 grad_mse = 0
-                for real_g, fake_g, _mask in aligned_grads:
+                for real_g, fake_g, _contrast_g, _mask in aligned_grads:
                     grad_mse += mse(fake_g, real_g)
                 grad_mse *= coeffs.c_grad_mse / len(aligned_grads)
                 professor_loss += grad_mse
@@ -365,7 +411,7 @@ class GenerativeAgent(LearningAgent):
 
             if coeffs.c_grad_cos > 0:
                 cos_loss = 0
-                for real_grads, fake_grads, _mask in aligned_grads:
+                for real_grads, fake_grads, _contrast_g, _mask in aligned_grads:
                     cos_loss += cos(fake_grads, real_grads)
                 cos_loss *= coeffs.c_grad_cos / len(aligned_grads)
                 professor_loss += cos_loss
@@ -378,10 +424,27 @@ class GenerativeAgent(LearningAgent):
             # gradients.
 
             if coeffs.c_next_nll > 0:
-                next_nll = self._next_nll(student, data, target, aligned_grads)
+                next_l = self._next_nll(student, data, target, aligned_grads)
+                next_nll, contrast_next_nll = next_l
                 professor_loss += next_nll
                 info["Next NLL"] = info.get("Next NLL", 0) + next_nll.item()
+                if contrast_next_nll is not None:
+                    professor_loss -= contrast_next_nll
+                    info["Next NLL - contr"] = info["Next NLL - contr"] +\
+                        contrast_next_nll.item()
                 del next_nll
+
+            # -----------------------------------------------------------------
+            #
+            # Cross entropy for the student optimized with proposed
+            # gradients. (symmetric: gradients from real data applied
+            # on synthetic data)
+
+            if coeffs.c_next_nll2 > 0:
+                next_nll2 = self._next_nll2(student, fake_data, target, aligned_grads)
+                professor_loss += next_nll2
+                info["Next NLL (2)"] = info.get("Next NLL (2)", 0) + next_nll2.item()
+                del next_nll2
 
             # -----------------------------------------------------------------
             #
@@ -466,7 +529,7 @@ class GenerativeAgent(LearningAgent):
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
         coeffs = self.coeffs
-        for _real_grads, fake_grads, mask in aligned_grads:
+        for _real_grads, fake_grads, _contrast_grads, mask in aligned_grads:
             next_params = OrderedDict({})
             pg_pairs = zip(student.named_parameters(), fake_grads)
             for (name, param), grad in pg_pairs:
@@ -487,7 +550,7 @@ class GenerativeAgent(LearningAgent):
 
     def _hess_vec(self, student, aligned_grads):
         hess_loss = 0
-        for real_grads, fake_grads, _mask in aligned_grads:
+        for real_grads, fake_grads, _contrast_grads, _mask in aligned_grads:
             rand_v = [torch.bernoulli(torch.rand_like(g)) for g in real_grads]
             real_hv = grad_of(real_grads, student.parameters(), rand_v)
             fake_hv = grad_of(fake_grads, student.parameters(), rand_v)
@@ -498,43 +561,107 @@ class GenerativeAgent(LearningAgent):
     def _next_nll(self, student, data, target, aligned_grads):
         next_nll = 0
         coeffs = self.coeffs
-        for _real_grads, fake_grads, mask in aligned_grads:
-            new_params = OrderedDict({})
-            pg_pairs = zip(student.named_parameters(), fake_grads)
-            for (name, param), grad in pg_pairs:
+        do_contrast = coeffs.c_contrast_next_nll > 0
+        contrast_nll = 0 if do_contrast else None
+
+        for _real_grads, fake_grads, contrast_grads, mask in aligned_grads:
+            new_params, contrast_params = OrderedDict({}), OrderedDict({})
+            pg_pairs = zip(student.named_parameters(), fake_grads, contrast_grads)
+            for (name, param), grad, contrast_grad in pg_pairs:
                 new_params[name] = param.detach() - coeffs.next_lr * grad
+                if do_contrast:
+                    contrast_params[name] = param.detach() -\
+                        coeffs.next_lr * contrast_grad
             if mask is None:
                 next_output = student(data, params=new_params)
                 next_nll += F.cross_entropy(next_output, target)
+                if do_contrast:
+                    with torch.no_grad():
+                        contrast_output = student(data, params=contrast_params)
+                        contrast_p = F.softmax(contrast_output, dim=1)
+                    next_logp = F.log_softmax(next_output, dim=1)
+                    contrast_nll += F.kl_div(next_logp, contrast_p)
+
             else:
                 next_output = student(data[mask], params=new_params)
                 next_nll += F.cross_entropy(next_output, target[mask])
+                if do_contrast:
+                    with torch.no_grad():
+                        contrast_output = student(data[mask], params=contrast_params)
+                        contrast_p = F.softmax(contrast_output, dim=1)
+                    next_logp = F.log_softmax(next_output, dim=1)
+                    contrast_nll += F.kl_div(next_logp, contrast_p)
 
         next_nll *= coeffs.c_next_nll / len(aligned_grads)
-        return next_nll
+        if do_contrast:
+            contrast_nll *= coeffs.c_next_nll * coeffs.c_contrast_next_nll
+            contrast_nll /= len(aligned_grads)
+        return next_nll, contrast_nll
 
-    def _get_aligned_grads(self, student, real_nlls, fake_nlls, target, idxs=None):
+    def _next_nll2(self, student, fake_data, target, aligned_grads):
+        next_nll2 = 0
+        coeffs = self.coeffs
+        for real_grads, _fake_grads, _contrast_grads, mask in aligned_grads:
+            new_params = OrderedDict({})
+            pg_pairs = zip(student.named_parameters(), real_grads)
+            for (name, param), grad in pg_pairs:
+                new_params[name] = param.detach() - coeffs.next_lr * grad.detach()
+            if mask is None:
+                next_output = student(fake_data, params=new_params)
+                next_nll2 += F.cross_entropy(next_output, target)
+            else:
+                next_output = student(fake_data[mask], params=new_params)
+                next_nll2 += F.cross_entropy(next_output, target[mask])
+
+        next_nll2 *= coeffs.c_next_nll2 / len(aligned_grads)
+        return next_nll2
+
+    def _get_aligned_grads(self, student,
+                           real_nlls, fake_nlls, contrast_nlls,
+                           target, idxs=None):
         aligned_grads = []
         if self.grad_type == "batch":
-            real_g = grad_of(real_nlls.mean(), student.parameters())
-            fake_g = grad_of(fake_nlls.mean(), student.parameters())
-            aligned_grads.append((real_g, fake_g, None))
+            real_g, fake_g, contrast_g = None, None, None
+            if self.need_real_grad:
+                real_g = grad_of(real_nlls.mean(), student.parameters())
+            if self.need_fake_grad:
+                fake_g = grad_of(fake_nlls.mean(), student.parameters())
+            if self.need_contrast_grad:
+                contrast_g = grad_of(contrast_nlls.mean(), student.parameters())
+                for cgrad in contrast_g:
+                    cgrad.detach_()
+            aligned_grads.append((real_g, fake_g, contrast_g, None))
         elif self.grad_type == "class":
             for class_idx in range(self.nclasses):
                 mask = (target == class_idx)
                 if mask.any().item():
-                    real_nll_i = real_nlls[mask].mean()
-                    fake_nll_i = fake_nlls[mask].mean()
-                    real_g = grad_of(real_nll_i, student.parameters())
-                    fake_g = grad_of(fake_nll_i, student.parameters())
-                    aligned_grads.append((real_g, fake_g, mask))
+                    real_g, fake_g, contrast_g = None, None, None
+                    if self.need_real_grad:
+                        real_nll_i = real_nlls[mask].mean()
+                        real_g = grad_of(real_nll_i, student.parameters())
+                    if self.need_fake_grad:
+                        fake_nll_i = fake_nlls[mask].mean()
+                        fake_g = grad_of(fake_nll_i, student.parameters())
+                    if self.need_contrast_grad:
+                        contrast_nll_i = contrast_nlls[mask].mean()
+                        contrast_g = grad_of(contrast_nll_i, student.parameters())
+                    for cgrad in contrast_g:
+                        cgrad.detach_()
+                    aligned_grads.append((real_g, fake_g, contrast_g, mask))
         else:
             if idxs is None:
                 idxs = range(len(target))
             for idx in idxs:
-                real_g = grad_of(real_nlls[idx:idx + 1], student.parameters())
-                fake_g = grad_of(fake_nlls[idx:idx + 1], student.parameters())
-                aligned_grads.append((real_g, fake_g, slice(idx, idx+1)))
+                real_g, fake_g, contrast_g = None, None, None
+                if self.need_real_grad:
+                    real_g = grad_of(real_nlls[idx:idx + 1], student.parameters())
+                if self.need_fake_grad:
+                    fake_g = grad_of(fake_nlls[idx:idx + 1], student.parameters())
+                if self.need_contrast_grad:
+                    contrast_g = grad_of(contrast_nlls[idx:idx + 1], student.parameters())
+                    for cgrad in contrast_g:
+                        cgrad.detach_()
+                aligned_grads.append((real_g, fake_g, contrast_g, slice(idx, idx+1)))
         return aligned_grads
 
     def _do_gan(self, real_output, fake_output, target):
@@ -568,12 +695,12 @@ class GenerativeAgent(LearningAgent):
 
         # Return useful info
 
-        info = dict({})
+        info = OrderedDict({})
         info["Discriminator BCE - gen "] = d_gen_loss.item()
-        info["Discriminator avg - gen "] = d_gen_out.mean().item()
         info["Discriminator BCE - real"] = loss_real.item()
-        info["Discriminator avg - real"] = d_real_out.mean().item()
         info["Discriminator BCE - fake"] = loss_fake.item()
+        info["Discriminator avg - gen "] = d_gen_out.mean().item()
+        info["Discriminator avg - real"] = d_real_out.mean().item()
         info["Discriminator avg - fake"] = d_fake_out.mean().item()
 
         return d_gen_loss * self.coeffs.c_d, info
