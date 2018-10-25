@@ -54,6 +54,19 @@ class GenerativeAgent(LearningAgent):
 
         self.coeffs = coeffs = Namespace()
 
+        # ------------------------------------------------------------
+        #
+        # Not to ruin the running batch of experiments; Remove ASAP
+
+        if not hasattr(args, "c_contrast_kl"):
+            args.c_contrast_kl = 0
+        if not hasattr(args, "c_contrast_next_nll"):
+            args.c_contrast_next_nll = 0
+        if not hasattr(args, "c_next_nll2"):
+            args.c_next_nll2 = 0
+
+        # --------------------
+
         self.coeffs.c_nll = args.c_nll
         self.coeffs.c_kl = args.c_kl
         self.coeffs.c_contrast_kl = args.c_contrast_kl
