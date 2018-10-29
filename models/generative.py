@@ -6,19 +6,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Encoder(nn.Module):
-    def __init__(self, in_size: Tuple[int, int, int], nz: int):
-        super(Encoder, self).__init__()
-        self.linear1 = nn.Linear(reduce(mul, in_size), 400)
-        self.linear2 = nn.Linear(400, 400)
-        self.mu_linear = nn.Linear(400, nz)
-        self.sigma_linear = nn.Linear(400, nz)
+class LinearEncoder(nn.Module):
+    def __init__(self, in_size: Tuple[int, int, int],
+                 nz: int, nef: int) -> None:
+        super(LinearEncoder, self).__init__()
+        self.linear1 = nn.Linear(reduce(mul, in_size), nef * 64)
+        self.linear2 = nn.Linear(nef * 32, nef * 32)
+        self.mu_linear = nn.Linear(nef * 32, nz)
+        self.sigma_linear = nn.Linear(nef * 32, nz)
 
     # pylint: disable=arguments-differ
     def forward(self, x):
         x = x.view(x.size(0), -1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
+        return self.mu_linear(x), self.sigma_linear(x)
+
+
+class ConvEncoder(nn.Module):
+    def __init__(self, in_size: Tuple[int, int, int],
+                 nz: int, nef: int) -> None:
+        nc, inh, inw = in_size
+        if (inh, inw) != (32, 32):
+            raise ValueError("Wrong input size. Expected nc x 32 x 32.")
+
+        super(ConvEncoder, self).__init__()
+        self.encoder = nn.Sequential(
+            # input is (nc) x 32 x 32
+            nn.Conv2d(nc, nef, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (nef) x 16 x 16
+            nn.Conv2d(nef, nef * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(nef * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (nef*2) x 8 x 8
+            nn.Conv2d(nef * 2, nef * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(nef * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (nef*4) x 4 x 4
+        )
+        self.mu_linear = nn.Linear(nef * 4 * 16, nz)
+        self.sigma_linear = nn.Linear(nef * 4 * 16, nz)
+
+    def forward(self, x):
+        x = self.encoder(x).view(x.size(0), -1)
         return self.mu_linear(x), self.sigma_linear(x)
 
 
