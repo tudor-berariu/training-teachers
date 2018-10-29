@@ -11,7 +11,7 @@ class LinearEncoder(nn.Module):
                  nz: int, nef: int) -> None:
         super(LinearEncoder, self).__init__()
         self.linear1 = nn.Linear(reduce(mul, in_size), nef * 64)
-        self.linear2 = nn.Linear(nef * 32, nef * 32)
+        self.linear2 = nn.Linear(nef * 64, nef * 32)
         self.mu_linear = nn.Linear(nef * 32, nz)
         self.sigma_linear = nn.Linear(nef * 32, nz)
 
