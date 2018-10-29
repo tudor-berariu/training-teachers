@@ -240,7 +240,7 @@ def run(args: Namespace):
             seen_examples += len(data)
 
             if reset_students:
-                p_reset = len(data) / args.reset_student
+                p_reset = len(students) * len(data) / args.reset_student
                 if np.random.sample() < p_reset:
                     idx = np.random.randint(1, args.nstudents)
                     print("[MAIN_] Reset student", idx)
