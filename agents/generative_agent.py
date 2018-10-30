@@ -54,19 +54,6 @@ class GenerativeAgent(LearningAgent):
 
         self.coeffs = coeffs = Namespace()
 
-        # ------------------------------------------------------------
-        #
-        # Not to ruin the running batch of experiments; Remove ASAP
-
-        if not hasattr(args, "c_contrast_kl"):
-            args.c_contrast_kl = 0
-        if not hasattr(args, "c_contrast_next_nll"):
-            args.c_contrast_next_nll = 0
-        if not hasattr(args, "c_next_nll2"):
-            args.c_next_nll2 = 0
-
-        # --------------------
-
         self.coeffs.c_nll = args.c_nll
         self.coeffs.c_kl = args.c_kl
         self.coeffs.c_contrast_kl = args.c_contrast_kl
@@ -105,12 +92,16 @@ class GenerativeAgent(LearningAgent):
         w_contrast_grad = ["c_contrast_next_nll"]
         self.need_contrast_grad = check_need(w_contrast_grad)
 
+        # ---------------------------------------------------------------------
+
         self.grad_type = args.grad_type
         assert self.grad_type in ["batch", "example", "class"]
         if self.grad_type == "example":
             self.grad_samples = args.grad_samples
         else:
             self.grad_samples = None
+
+        self.student_train_on_fake = args.student_train_on_fake
 
         self.crt_device = None
         self.eval_samples = args.eval_samples
@@ -346,7 +337,11 @@ class GenerativeAgent(LearningAgent):
             # backpropagate the professor loss, clean the student's
             # gradients and then backpropagate this nll.
 
-            student_loss = real_nlls.mean()
+            if sidx == 0 or not self.student_train_on_fake:
+                student_loss = real_nlls.mean()
+            else:
+                student_loss = fake_nlls.mean()
+
             if coeffs.c_l2 > 0:
                 l2_loss = l2(student.parameters()) * coeffs.c_l2
                 student_loss = student_loss + l2_loss
@@ -513,9 +508,21 @@ class GenerativeAgent(LearningAgent):
                 professor_loss /= nstudents
                 professor_loss.backward(retain_graph=True)
 
-            student_loss.backward()
+            old_grads = (p.grad.data.clone() for p in generator.parameters())
+
+            if sidx == 0 or not self.student_train_on_fake:
+                student.zero_grad()
+                student_loss.backward()
+            else:
+                sgrads = autograd.grad(student_loss, student.parameters(),
+                                       retain_graph=True)
+                for sparam, sgrad in zip(student.parameters(), sgrads):
+                    sparam.grad.data.copy_(sgrad.data)
 
             del professor_loss, student_loss
+
+            for param, old_g in zip(generator.parameters(), old_grads):
+                assert torch.allclose(param.grad.data, old_g)
 
             # Backpropagation ended for current student.
             #

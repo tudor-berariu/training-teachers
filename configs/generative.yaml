@@ -10,8 +10,8 @@ test_batch_size: 10000
 in_size: [1, 32, 32]
 
 random_params: yes
-nstudents: 5
-random_students: yes
+nstudents: 9
+random_students: no
 
 tasks:
   - FashionMNIST
@@ -28,23 +28,26 @@ student_optimizer:
   lr: 0.001
   nesterov: delete
 
-c_l2: .0005
+c_l2: .0001
 
 professor_type: generative
-reset_student: 12800
+
+reset_student: 120000
+professor_starts_student: no
 
 loss_learning:
   debug: no
 
   encoder:
-    name: Encoder
+    name: LinearEncoder
+    nef: 8
   generator:
-    name: Generator
+    name: SkipGenerator
     ngf: 16
   discriminator:
     name: OutputDiscriminator
 
-  nz: 64
+  nz: 32
 
   c_nll: 0
   c_kl: 1
@@ -55,16 +58,18 @@ loss_learning:
   c_contrast_next_nll: 0
   c_next_nll2: 0
   c_hess: 0
-  c_d: 0
+  c_d: 0.5
   c_next_kl: 0
   c_recon: 0
-  c_latent_kl: 1
+  c_latent_kl: 0.1
 
-  target_dropout: .5
+  target_dropout: 0
 
   grad_type: example
   grad_samples: 20
   next_lr: .001
+
+  rand_permute_outputs: yes
 
   optimizer:
     name: Adam
@@ -73,8 +78,9 @@ loss_learning:
     momentum: delete
 
   eval_samples: 128
+  student_train_on_fake: yes
 
 evaluation:
-  nstudents: 1
+  nstudents: 5
   teaching_steps: 2000
   teaching_eval_freq: 25

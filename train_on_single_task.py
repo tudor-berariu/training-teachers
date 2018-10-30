@@ -254,7 +254,8 @@ def run(args: Namespace):
                         students[idx] = get_model(classifiers, args.student,
                                                   in_size=in_size,
                                                   nclasses=nclasses).to(device)
-                    agent.init_student(students[idx], args.student_optimizer)
+                    if args.professor_starts_student:
+                        agent.init_student(students[idx], args.student_optimizer)
                     new_optimizer = get_optimizer(students[idx].parameters(),
                                                   args.student_optimizer)
                     student_optimizers[idx] = new_optimizer
@@ -296,7 +297,7 @@ def run(args: Namespace):
                     if best_fitness is None or new_avg > best_fitness:
                         best_fitness, best_epoch = new_avg, len(scores)
 
-                    if best_epoch + 5 < len(scores):
+                    if best_epoch + 10 < len(scores):
                         print(clr("[MAIN_] Early stopping.", "red"))
                         should_stop = True
                         break
