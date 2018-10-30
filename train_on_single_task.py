@@ -84,6 +84,7 @@ def test_professor(agent, device, test_loader, args, state_dict=None):
                 l2_loss = l2(student.parameters()) * args.c_l2
                 full_loss = synthetic_loss + l2_loss
             else:
+                l2_loss = None
                 full_loss = synthetic_loss
             full_loss.backward()
             student_optimizer.step()
