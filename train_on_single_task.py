@@ -144,8 +144,6 @@ def what_to_reset(ref_acc: float, nclasses, strategy, accs, ends):
                                (ref_acc),
                                nstudents)
         thrs = thrs[1:]
-
-        print(thrs)
         balance = 0
         prev_idxs = []
         for thr in thrs[::-1]:
