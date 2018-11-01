@@ -128,6 +128,46 @@ def get_n_samples(data_loader, nsamples: int) -> Tensor:
     return {"data": data.clone(), "target": target.clone()}
 
 
+def what_to_reset(ref_acc: float, nclasses, strategy, accs, ends):
+    to_reset = []
+    start_idx, end_idx = ends
+    nstudents = len(accs[start_idx:end_idx])
+
+    if ref_acc > 150. / nclasses:
+        if strategy == "powspace":
+            thrs = np.power(np.linspace(np.power((150. / nclasses), np.e),
+                                        np.power(ref_acc, np.e),
+                                        nstudents),
+                            1/np.e)
+        else:
+            thrs = np.linspace((150. / nclasses),
+                               (ref_acc),
+                               nstudents)
+        thrs = thrs[1:]
+
+        print(thrs)
+        balance = 0
+        prev_idxs = []
+        for thr in thrs[::-1]:
+            good_idxs = []
+            for sidx in range(start_idx, end_idx):
+                if sidx not in prev_idxs and accs[sidx] > thr:
+                    good_idxs.append(sidx)
+            np.random.shuffle(good_idxs)
+            balance += len(good_idxs) - 1
+            if balance > 0:
+                to_reset.append(np.random.choice(good_idxs))
+                print(f"[MAIN_] More students than needed over {thr:.3f}."
+                      f" Reset student {to_reset[-1]:d}.")
+                balance -= 1
+            while balance > 0:
+                good_idxs.pop()
+                balance -= 1
+            prev_idxs.extend(good_idxs)
+
+    return to_reset
+
+
 def run(args: Namespace):
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
@@ -210,7 +250,35 @@ def run(args: Namespace):
     professor_trace = OrderedDict({})
     professor_avg_trace = dict({})
 
-    reset_students = args.nstudents > 1 and args.reset_student > 0
+    nstudents = args.nstudents
+
+    if nstudents > 1:
+        if isinstance(args.reset_student, list):
+            if len(args.reset_student) == nstudents:
+                reset_student_freq = args.reset_student[1:]
+            elif len(args.reset_student) == nstudents - 1:
+                reset_student_freq = args.reset_student
+            else:
+                raise ValueError("Reset times must match no. of students.")
+        elif isinstance(args.reset_student, int):
+            reset_student_freq = [args.reset_student] * (nstudents - 1)
+        elif args.reset_student in ["linspace", "powspace"]:
+            reset_student_freq = args.reset_student
+        else:
+            raise ValueError("Expected int or list of ints. Got" +
+                             str(args.reset_student))
+    else:
+        reset_student_freq = False
+
+    student_accs_trace = [.0] * nstudents
+
+    if hasattr(llargs, "students_trained_on_real_data"):
+        students_trained_on_real_data = llargs.students_trained_on_real_data
+        assert students_trained_on_real_data > 0
+    elif llargs.student_train_on_fake:
+        students_trained_on_real_data = 1
+    else:
+        students_trained_on_real_data = nstudents
 
     for epoch in range(args.epochs_no):
         for batch_idx, (data, target) in enumerate(train_loader):
@@ -219,7 +287,8 @@ def run(args: Namespace):
             for student_optimizer in student_optimizers:
                 student_optimizer.zero_grad()
 
-            student_losses, prof_losses = agent.process(data, target, nrmlz)
+            student_losses, student_accs, prof_losses =\
+                agent.process(data, target, nrmlz)
 
             if student_losses is None:
                 print(clr("[MAIN_] Found NaN. Early stopping.", "red"))
@@ -240,26 +309,61 @@ def run(args: Namespace):
 
             seen_examples += len(data)
 
-            if reset_students:
-                p_reset = len(students) * len(data) / args.reset_student
-                if np.random.sample() < p_reset:
-                    idx = np.random.randint(1, args.nstudents)
-                    print("[MAIN_] Reset student", idx)
+            for sidx, sacc in student_accs.items():
+                student_accs_trace[sidx] *= .8
+                student_accs_trace[sidx] += .2 * sacc
 
-                    if not args.random_params:
-                        student[idx].load_state_dict(state_dict)
-                    elif args.random_students:
-                        students[idx] = sample_classifier(in_size,
-                                                          nclasses).to(device)
-                    else:
-                        students[idx] = get_model(classifiers, args.student,
-                                                  in_size=in_size,
-                                                  nclasses=nclasses).to(device)
-                    if args.professor_starts_student:
-                        agent.init_student(students[idx], args.student_optimizer)
-                    new_optimizer = get_optimizer(students[idx].parameters(),
-                                                  args.student_optimizer)
-                    student_optimizers[idx] = new_optimizer
+            to_reset = []
+
+            if args.debug:
+                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
+                      "   " +
+                      clr("  ".join([f"{acc:5.2f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
+                      " | " +
+                      "  ".join([f"{acc:5.2f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
+                      "   " +
+                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
+
+            if isinstance(reset_student_freq, str):
+                ref_acc = student_accs_trace[0]
+
+                to_reset_1, to_reset_2 = [], []
+                if students_trained_on_real_data > 1:
+                    to_reset_1 = what_to_reset(ref_acc, nclasses,
+                                               reset_student_freq,
+                                               student_accs_trace,
+                                               (1, students_trained_on_real_data))
+                if students_trained_on_real_data < nstudents:
+                    to_reset_2 = what_to_reset(ref_acc, nclasses,
+                                               reset_student_freq,
+                                               student_accs_trace,
+                                               (students_trained_on_real_data, nstudents))
+                to_reset = to_reset_1 + to_reset_2
+
+            else:
+                # Stochastic reset
+                for sidx, freq in zip(range(1, nstudents), reset_student_freq):
+                    p_reset = len(data) / freq
+                    if np.random.sample() < p_reset:
+                        to_reset.append(sidx)
+
+            for sidx in to_reset:
+                print("[MAIN_] Reset student", sidx)
+
+                if not args.random_params:
+                    student[sidx].load_state_dict(state_dict)
+                elif args.random_students:
+                    students[sidx] = sample_classifier(in_size,
+                                                       nclasses).to(device)
+                else:
+                    students[sidx] = get_model(classifiers, args.student,
+                                               in_size=in_size,
+                                               nclasses=nclasses).to(device)
+                if args.professor_starts_student:
+                    agent.init_student(students[sidx], args.student_optimizer)
+                student_optimizers[sidx] = get_optimizer(students[sidx].parameters(),
+                                                         args.student_optimizer)
+                student_accs_trace[sidx] = 0
 
             if seen_examples - last_seen >= args.log_interval:
                 details = [("Epoch", epoch + 1),

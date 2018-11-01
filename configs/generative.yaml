@@ -10,7 +10,7 @@ test_batch_size: 10000
 in_size: [1, 32, 32]
 
 random_params: yes
-nstudents: 9
+nstudents: 15
 random_students: no
 
 tasks:
@@ -27,12 +27,13 @@ student_optimizer:
   name: Adam
   lr: 0.001
   nesterov: delete
+  momentum: delete
 
 c_l2: .0001
 
 professor_type: generative
 
-reset_student: 120000
+reset_student: powspace
 professor_starts_student: no
 
 loss_learning:
@@ -51,25 +52,23 @@ loss_learning:
 
   c_nll: 0
   c_kl: 1
-  c_contrast_kl: 0.5
+  c_contrast_kl: .8
   c_grad_mse: 0
   c_grad_cos: 0
   c_next_nll: 0
   c_contrast_next_nll: 0
   c_next_nll2: 0
   c_hess: 0
-  c_d: 0.5
+  c_d: .8
   c_next_kl: 0
   c_recon: 0
-  c_latent_kl: 0.1
+  c_latent_kl: .01
 
   target_dropout: 0
 
   grad_type: example
-  grad_samples: 20
+  grad_samples: 16
   next_lr: .001
-
-  rand_permute_outputs: yes
 
   optimizer:
     name: Adam
@@ -79,6 +78,9 @@ loss_learning:
 
   eval_samples: 128
   student_train_on_fake: yes
+  students_trained_on_real_data: 6
+  permute_discriminator_inputs: yes
+  label_to_discriminator: no
 
 evaluation:
   nstudents: 5

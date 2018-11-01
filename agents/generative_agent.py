@@ -50,6 +50,31 @@ class GenerativeAgent(LearningAgent):
         self.old_generator = None
 
         self.classeye = torch.eye(args.nclasses)
+
+        # ----------------------------------------------------------------------
+        # drop this as soon as you can (for backward compatibility)
+
+        if hasattr(args, "label_to_discriminator"):
+            self.label_to_discriminator = args.label_to_discriminator
+        else:
+            self.label_to_discriminator = True
+
+        if hasattr(args, "permute_discriminator_inputs"):
+            self.permute_discriminator_inputs = args.permute_discriminator_inputs
+        else:
+            self.permute_discriminator_inputs = False
+
+        if hasattr(args, "students_trained_on_real_data"):
+            self.students_trained_on_real_data = args.students_trained_on_real_data
+            assert self.students_trained_on_real_data > 0
+            args.student_train_on_fake = args.students_trained_on_real_data < len(students)
+        elif args.student_train_on_fake:
+            self.students_trained_on_real_data = 1
+        else:
+            self.students_trained_on_real_data = len(students)
+
+        # ----------------------------------------------------------------------
+
         self._create_components()
 
         self.coeffs = coeffs = Namespace()
@@ -128,7 +153,8 @@ class GenerativeAgent(LearningAgent):
 
         if hasattr(args, "discriminator") and args.c_d > 0:
             discriminator = get_model(generative, args.discriminator,
-                                      nclasses=args.nclasses)
+                                      nclasses=args.nclasses,
+                                      use_labels=self.label_to_discriminator)
             self.discriminator = discriminator
             self.bce_loss = nn.BCELoss()
             self.d_optimizer = optim.Adam(discriminator.parameters(), lr=.001)
@@ -177,7 +203,7 @@ class GenerativeAgent(LearningAgent):
         # 3. save some comparisons
 
         with torch.no_grad():
-            mean, log_var = encoder(data)
+            mean, log_var = (None, None) if encoder is None else encoder(data)
             fake_data, _target = generator(target, mean=mean, log_var=log_var)
             all_data = torch.cat((data, fake_data), dim=0).cpu()
             save_image(all_data,
@@ -266,7 +292,7 @@ class GenerativeAgent(LearningAgent):
 
         if self.need_contrast:
             with torch.no_grad():
-                contrast_data, _target = generator(target)
+                contrast_data, _target = generator(target, tmask=tmask)
         else:
             contrast_data = None
 
@@ -306,6 +332,7 @@ class GenerativeAgent(LearningAgent):
             ngrad_samples = min(len(data), self.grad_samples)
 
         nstudents = len(self.students)  # type: int
+        student_accs = OrderedDict({})
         for sidx, student in enumerate(self.students):
 
             # -----------------------------------------------------------------
@@ -318,6 +345,10 @@ class GenerativeAgent(LearningAgent):
             fake_output = student(fake_data)
             real_nlls = F.cross_entropy(real_output, target, reduction="none")
             fake_nlls = F.cross_entropy(fake_output, target, reduction="none")
+
+            real_pred = real_output.max(1, keepdim=True)[1]
+            correct = real_pred.eq(target.view_as(real_pred)).sum().item()
+            student_accs[sidx] = correct / len(data) * 100
 
             if self.need_contrast:
                 if self.need_contrast_grad:
@@ -337,7 +368,7 @@ class GenerativeAgent(LearningAgent):
             # backpropagate the professor loss, clean the student's
             # gradients and then backpropagate this nll.
 
-            if sidx == 0 or not self.student_train_on_fake:
+            if sidx < self.students_trained_on_real_data:
                 student_loss = real_nlls.mean()
             else:
                 student_loss = fake_nlls.mean()
@@ -391,7 +422,8 @@ class GenerativeAgent(LearningAgent):
                 info["KL div"] = info.get("KL div", 0) + kldiv.item()
 
                 if coeffs.c_contrast_kl > 0:
-                    contrast_p = F.softmax(contrast_output, dim=1).detach()
+                    with torch.no_grad():
+                        contrast_p = F.softmax(contrast_output, dim=1)
                     contrast_kldiv = F.kl_div(fake_logp, contrast_p)
                     contrast_kldiv *= coeffs.c_kl * coeffs.c_contrast_kl
                     professor_loss -= contrast_kldiv
@@ -438,7 +470,7 @@ class GenerativeAgent(LearningAgent):
                 info["Next NLL"] = info.get("Next NLL", 0) + next_nll.item()
                 if contrast_next_nll is not None:
                     professor_loss -= contrast_next_nll
-                    info["Next NLL - contr"] = info["Next NLL - contr"] +\
+                    info["Next NLL - contr"] = info.get("Next NLL - contr", 0) +\
                         contrast_next_nll.item()
                 del next_nll
 
@@ -508,21 +540,18 @@ class GenerativeAgent(LearningAgent):
                 professor_loss /= nstudents
                 professor_loss.backward(retain_graph=True)
 
-            old_grads = (p.grad.data.clone() for p in generator.parameters())
-
-            if sidx == 0 or not self.student_train_on_fake:
+            if sidx < self.students_trained_on_real_data:
                 student.zero_grad()
                 student_loss.backward()
             else:
-                sgrads = autograd.grad(student_loss, student.parameters(),
-                                       retain_graph=True)
-                for sparam, sgrad in zip(student.parameters(), sgrads):
-                    sparam.grad.data.copy_(sgrad.data)
+                for param in generator.parameters():
+                    param.requires_grad_(False)
+                student.zero_grad()
+                student_loss.backward(retain_graph=True)
+                for param in generator.parameters():
+                    param.requires_grad_(True)
 
             del professor_loss, student_loss
-
-            for param, old_g in zip(generator.parameters(), old_grads):
-                assert torch.allclose(param.grad.data, old_g)
 
             # Backpropagation ended for current student.
             #
@@ -544,7 +573,7 @@ class GenerativeAgent(LearningAgent):
 
             self.prof_optimizer.step()
 
-        return student_losses, info
+        return student_losses, student_accs, info
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
@@ -679,8 +708,7 @@ class GenerativeAgent(LearningAgent):
                     fake_g = grad_of(fake_nlls[idx:idx + 1], student.parameters())
                 if self.need_contrast_grad:
                     contrast_g = grad_of(contrast_nlls[idx:idx + 1], student.parameters())
-                    for cgrad in contrast_g:
-                        cgrad.detach_()
+                    contrast_g = [cg.detach() for cg in contrast_g]
                 aligned_grads.append((real_g, fake_g, contrast_g, slice(idx, idx+1)))
         return aligned_grads
 
@@ -696,11 +724,26 @@ class GenerativeAgent(LearningAgent):
 
         self.d_optimizer.zero_grad()
 
-        d_real_in = torch.cat((real_output.detach(), label), dim=1)
+        if self.permute_discriminator_inputs:
+            with torch.no_grad():
+                perm = torch.randperm(self.nclasses).long().to(real_output.device)
+                perm_real = real_output.index_select(1, perm)
+                perm_fake = fake_output.index_select(1, perm)
+        else:
+            perm_real = real_output.detach()
+            perm_fake = fake_output.detach()
+
+        if self.label_to_discriminator:
+            with torch.no_grad():
+                d_real_in = torch.cat((perm_real, label), dim=1)
+                d_fake_in = torch.cat((perm_fake, label), dim=1)
+        else:
+            d_real_in = perm_real
+            d_fake_in = perm_fake
+
         d_real_out = self.discriminator(d_real_in)
         loss_real = self.bce_loss(d_real_out, ones)
 
-        d_fake_in = torch.cat((fake_output.detach(), label), dim=1)
         d_fake_out = self.discriminator(d_fake_in)
         loss_fake = self.bce_loss(d_fake_out, zeros)
 
@@ -709,7 +752,11 @@ class GenerativeAgent(LearningAgent):
 
         # Improve generator
 
-        d_gen_in = torch.cat((fake_output, label), dim=1)
+        if self.label_to_discriminator:
+            d_gen_in = torch.cat((fake_output, label), dim=1)
+        else:
+            d_gen_in = fake_output
+
         d_gen_out = self.discriminator(d_gen_in)
         d_gen_loss = self.bce_loss(d_gen_out, ones)
 

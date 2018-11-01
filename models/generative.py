@@ -191,10 +191,11 @@ class SkipGenerator(nn.Module):
 
 class OutputDiscriminator(nn.Module):
 
-    def __init__(self, nclasses: int):
+    def __init__(self, nclasses: int, use_labels: bool=False):
         super(OutputDiscriminator, self).__init__()
+        in_no = (nclasses * 2) if use_labels else nclasses
         self.model = nn.Sequential(
-            nn.Linear(nclasses * 2, 256),
+            nn.Linear(in_no, 256),
             nn.ReLU(),
             nn.Linear(256, 32),
             nn.ReLU(),
