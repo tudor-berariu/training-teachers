@@ -364,6 +364,15 @@ def run(args: Namespace):
                 student_accs_trace[sidx] = 0
 
             if seen_examples - last_seen >= args.log_interval:
+
+                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
+                      "   " +
+                      clr("  ".join([f"{acc:4.1f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
+                      " | " +
+                      "  ".join([f"{acc:4.1f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
+                      "   " +
+                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
+
                 details = [("Epoch", epoch + 1),
                            ("Progress (%)", 100. * (batch_idx + 1) / len(train_loader)),
                            ("Student 0", np.mean(student_trace)),
