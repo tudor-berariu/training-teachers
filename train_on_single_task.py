@@ -260,7 +260,7 @@ def run(args: Namespace):
                 raise ValueError("Reset times must match no. of students.")
         elif isinstance(args.reset_student, int):
             reset_student_freq = [args.reset_student] * (nstudents - 1)
-        elif args.reset_student in ["linspace", "powspace"]:
+        elif args.reset_student in ["linspace", "powspace", "every_step"]:
             reset_student_freq = args.reset_student
         else:
             raise ValueError("Expected int or list of ints. Got" +
@@ -322,7 +322,9 @@ def run(args: Namespace):
                       "   " +
                       clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
 
-            if isinstance(reset_student_freq, str):
+            if reset_student_freq == "every_step":
+                to_reset = list(range(nstudents))
+            elif isinstance(reset_student_freq, str):
                 ref_acc = student_accs_trace[0]
 
                 to_reset_1, to_reset_2 = [], []
