@@ -77,3 +77,5 @@ professor:
   grad_samples: 10
 
   eval_samples: 128
+
+  student_reset: linspace

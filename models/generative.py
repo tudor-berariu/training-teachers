@@ -108,6 +108,8 @@ class GenericGenerator(nn.Module):
             noise = noise * torch.exp(.5 * log_var) + mean
 
         if self.perf_features is not None:
+            if perf is None:
+                perf = 1 / self.nclasses
             pf = self.perf_features.log_prob(perf).exp()\
                      .unsqueeze(0).repeat(batch_size, 1).to(device)
             all_latent = (cond, noise, pf)

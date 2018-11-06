@@ -24,58 +24,13 @@ from torchvision.utils import save_image
 
 
 """
-
-    if nstudents > 1:
-        if isinstance(args.reset_student, list):
-            if len(args.reset_student) == nstudents:
-                reset_student_freq = args.reset_student[1:]
-            elif len(args.reset_student) == nstudents - 1:
-                reset_student_freq = args.reset_student
-            else:
-                raise ValueError("Reset times must match no. of students.")
-        elif isinstance(args.reset_student, int):
-            reset_student_freq = [args.reset_student] * (nstudents - 1)
-        elif args.reset_student in ["linspace", "powspace", "every_step"]:
-            reset_student_freq = args.reset_student
-        else:
-            raise ValueError("Expected int or list of ints. Got" +
-                             str(args.reset_student))
-    else:
-        reset_student_freq = False
-
-    student_accs_trace = [.0] * nstudents
-
-    if hasattr(llargs, "students_trained_on_real_data"):
-        students_trained_on_real_data = llargs.students_trained_on_real_data
-        assert students_trained_on_real_data > 0
-    elif llargs.student_train_on_fake:
-        students_trained_on_real_data = 1
-    else:
-        students_trained_on_real_data = nstudents
-
-            for student_optimizer in student_optimizers:
-                student_optimizer.zero_grad()
-
-
-
-            if args.debug:
-                print("[MAIN_][DEBUG] Student 0:")
-                print(tabulate(grad_info(students[0])))
-
-            for student_optimizer in student_optimizers:
-                student_optimizer.step()
+    TODO: Fix reporting and that's it.
 
             student_trace.append(student_losses[0])
             all_students_trace.extend(student_losses)
             for name, value in prof_losses.items():
                 professor_trace.setdefault(name, []).append(value)
 
-
-            for sidx, sacc in student_accs.items():
-                student_accs_trace[sidx] *= .8
-                student_accs_trace[sidx] += .2 * sacc
-
-            to_reset = []
 
             if True:
                 print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
@@ -86,48 +41,7 @@ from torchvision.utils import save_image
                       "   " +
                       clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
 
-            if reset_student_freq == "every_step":
-                to_reset = list(range(nstudents))
-            elif isinstance(reset_student_freq, str):
-                ref_acc = student_accs_trace[0]
 
-                to_reset_1, to_reset_2 = [], []
-                if students_trained_on_real_data > 1:
-                    to_reset_1 = what_to_reset(ref_acc, nclasses,
-                                               reset_student_freq,
-                                               student_accs_trace,
-                                               (1, students_trained_on_real_data))
-                if students_trained_on_real_data < nstudents:
-                    to_reset_2 = what_to_reset(ref_acc, nclasses,
-                                               reset_student_freq,
-                                               student_accs_trace,
-                                               (students_trained_on_real_data, nstudents))
-                to_reset = to_reset_1 + to_reset_2
-
-            else:
-                # Stochastic reset
-                for sidx, freq in zip(range(1, nstudents), reset_student_freq):
-                    p_reset = len(data) / freq
-                    if np.random.sample() < p_reset:
-                        to_reset.append(sidx)
-
-            for sidx in to_reset:
-                # print("[MAIN_] Reset student", sidx)
-
-                if not args.random_params:
-                    student[sidx].load_state_dict(state_dict)
-                elif args.random_students:
-                    students[sidx] = sample_classifier(in_size,
-                                                       nclasses).to(device)
-                else:
-                    students[sidx] = get_model(classifiers, args.student,
-                                               in_size=in_size,
-                                               nclasses=nclasses).to(device)
-                if args.professor_starts_student:
-                    agent.init_student(students[sidx], args.student_optimizer)
-                student_optimizers[sidx] = get_optimizer(students[sidx].parameters(),
-                                                         args.student_optimizer)
-                student_accs_trace[sidx] = 0
 
             if seen_examples - last_seen >= args.log_interval:
 
@@ -162,8 +76,6 @@ from torchvision.utils import save_image
     all_students_trace = []
     professor_trace = OrderedDict({})
     professor_avg_trace = dict({})
-
-
 
 """
 
@@ -228,7 +140,7 @@ class GenerativeProfessor(Professor):
         self.start_params = start_params
 
         self._init_students()
-
+        self.nstudents = nstudents = len(self.students)
         self.generator_idx = 0
 
         self.generator, self.encoder, self.discriminator = None, None, None
@@ -305,7 +217,23 @@ class GenerativeProfessor(Professor):
 
         # ---------------------------------------------------------------------
 
+        if isinstance(args.student_reset, list):
+            if len(args.student_reset) == nstudents:
+                self.student_reset = args.student_reset
+            else:
+                raise ValueError("Reset times must match no. of students.")
+        elif isinstance(args.student_reset, int):
+            self.student_reset = [args.student_reset] * nstudents
+        elif args.student_reset in ["linspace", "powspace", "everystep"]:
+            self.student_reset = args.student_reset
+        else:
+            raise ValueError("Expected int or list of ints or string. Got" +
+                             str(args.student_reset))
+
+        # ---------------------------------------------------------------------
+
         self.student_perf_trace = [1.0 / nclasses] * len(self.students)
+        self.max_known_real_acc = 1.5 /nclasses
 
     def _init_students(self):
         in_size, nclasses = self.in_size, self.nclasses
@@ -463,7 +391,7 @@ class GenerativeProfessor(Professor):
         encoder = self.encoder
         generator = self.generator
 
-
+        orig_data, orig_target = data, target
         # ---------------------------------------------------------------------
         #
         # If gradients are computed per example, we'll take a fixed
@@ -487,8 +415,8 @@ class GenerativeProfessor(Professor):
                 with torch.no_grad():
                     prev_data, prev_target = self.old_generator(
                         nsamples=len(data), perf=perf)
-                data = torch.cat((data, prev_data.detach()), dim=0)
-                target = torch.cat((target, prev_target.detach()), dim=0)
+                data = torch.cat((orig_data, prev_data.detach()), dim=0)
+                target = torch.cat((orig_target, prev_target.detach()), dim=0)
                 del prev_data, prev_target
 
             # -----------------------------------------------------------------
@@ -558,6 +486,8 @@ class GenerativeProfessor(Professor):
 
             _, real_pred = real_output.max(1)
             real_acc = real_pred.eq(target).sum().item() / len(data) * 100
+
+            self.max_known_real_acc = max(real_acc, self.max_known_real_acc)
 
             _, fake_pred = fake_output.max(1)
             fake_acc = fake_pred.eq(target).sum().item() / len(data) * 100
@@ -794,8 +724,7 @@ class GenerativeProfessor(Professor):
             self.student_perf_trace[sidx] *= .75
             self.student_perf_trace[sidx] += .25 * fake_acc
 
-            print(real_acc)
-
+        self.reset_students(len(orig_data))
         return False
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
@@ -1013,3 +942,55 @@ class GenerativeProfessor(Professor):
         kld *= self.coeffs.c_latent_kl
 
         return kld, recon_loss
+
+    def reset_students(self, seen_samples: int):
+        student_reset = self.student_reset
+        nstudents = len(self.students)
+        nreal = nstudents - self.trained_on_fake
+        nfake = self.trained_on_fake
+        in_size, nclasses = self.in_size, self.nclasses
+
+        if student_reset == "everystep":
+            to_reset = list(range(nstudents))
+        elif isinstance(student_reset, str):
+            ref_acc = self.max_known_real_acc
+
+            to_reset_1, to_reset_2 = [], []
+            if nreal > 0:
+                to_reset_1 = what_to_reset(ref_acc, nclasses,
+                                           student_reset,
+                                           self.student_perf_trace,
+                                           (0, nreal))
+            if nfake > 0:
+                to_reset_2 = what_to_reset(ref_acc, nclasses,
+                                           student_reset,
+                                           self.student_perf_trace,
+                                           (nreal,
+                                            nstudents))
+            to_reset = to_reset_1 + to_reset_2
+
+        else:
+            to_reset = []
+            for sidx, freq in zip(range(0, nstudents), student_reset):
+                p_reset = seen_samples / freq
+                if np.random.sample() < p_reset:
+                    to_reset.append(sidx)
+
+        for sidx in to_reset:
+            if self.start_params:
+                self.students[sidx].load_state_dict(self.start_params)
+            elif self.args.random_students:
+                self.students[sidx] = sample_classifier(in_size, nclasses)
+                self.students[sidx].to(self.crt_device)
+            else:
+                self.students[sidx].reset_weights()
+
+            self.student_optimizers[sidx] = get_optimizer(
+                self.students[sidx].parameters(),
+                self.args.student_optimizer)
+            self.student_perf_trace[sidx] = 1 / self.nclasses
+
+        if to_reset and student_reset != "everystep":
+            self.info("Students",
+                       ",".join([str(sidx) for sidx in to_reset]),
+                       "needed reset.")
