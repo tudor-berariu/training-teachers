@@ -1,3 +1,4 @@
+import sys
 from typing import List, Tuple, Union
 from argparse import Namespace
 from termcolor import colored as clr
@@ -7,9 +8,21 @@ import torch.optim as optim
 import torch.nn as nn
 
 
-def print_conf(conf):
+def printer(name: str, level: int, verbose: int = 1):
+    def my_print(*args, tags: List[str] = None, **kwargs):
+        if verbose >= level:
+            sys.stdout.write(clr(f"[{name:^9s}]", "yellow"))
+            if tags is not None:
+                for tag in tags:
+                    sys.stdout.write(clr(f"[{tag:s}]", "yellow"))
+            sys.stdout.write(" ")
+            print(*args, **kwargs)
+    return my_print
+
+
+def print_conf(conf, print_func=print):
     conf = conf.tolist()
-    print("   " + "  ".join(f"{i: 7d}" for i in range(len(conf))))
+    print_func("   " + "  ".join(f"{i: 7d}" for i in range(len(conf))))
     for i, row in enumerate(conf):
         max_on_row = np.max(row)
         faces = []
@@ -19,18 +32,16 @@ def print_conf(conf):
                 face = clr(face, "yellow" if i == j else "red")
             faces.append(face)
         str_row = f"{i: 2d} " + "  ".join(faces)
-        print(str_row)
+        print_func(str_row)
 
 
-def print_nparams(model: nn.Module, name: str = "Model") -> None:
-    nparams = sum(p.nelement() for p in model.parameters())
-    print(f"[MODEL] {name:s} has {clr(f'{nparams:d}', 'yellow'):s} params.")
+def nparams(model: nn.Module, name: str = "Model") -> str:
+    nparam = sum(p.nelement() for p in model.parameters())
+    return f"{name:s} has {clr(f'{nparam:d}', 'yellow'):s} params."
 
 
 def get_optimizer(parameters, opt_args: Namespace) -> optim.Optimizer:
     cfgargs = get_kwargs(opt_args)
-    print("[MAIN_] The arguments for the", clr(opt_args.name, 'red'),
-          "optimizer: ", cfgargs)
     return getattr(optim, opt_args.name)(parameters, **cfgargs)
 
 

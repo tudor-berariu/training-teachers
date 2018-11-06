@@ -36,12 +36,18 @@ class ConvNet(nn.Module):
                  kernels: List[int] = None,
                  strides: List[int] = None,
                  use_bias: bool = False,
-                 use_dropout: bool = True) -> None:
+                 use_dropout: bool = True,
+                 use_batch_norm: bool = False) -> None:
         super(ConvNet, self).__init__()
+
+        if use_batch_norm:
+            raise NotImplementedError
 
         nin, h, w = in_size
         kernels = [5 for c in channels] if kernels is None else kernels
         strides = [1 for c in channels] if strides is None else strides
+
+        self.nclasses = nclasses
 
         params = OrderedDict({})
 
@@ -86,9 +92,6 @@ class ConvNet(nn.Module):
         self.nlinear = len(units)
         self.params = params
         self.use_dropout = use_dropout
-
-        print(f"[MODEL] Initialized Conv with {self.nconv:d} conv layers + "
-              f"{self.nlinear:d} linear layers.")
 
     def reset_weights(self) -> None:
         for idx in range(self.nconv):

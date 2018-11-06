@@ -4,6 +4,7 @@ from operator import mul
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributions as dist
 
 
 class LinearEncoder(nn.Module):
@@ -53,13 +54,88 @@ class ConvEncoder(nn.Module):
         return self.mu_linear(x), self.sigma_linear(x)
 
 
-class Generator(nn.Module):
-    def __init__(self, in_size: Tuple[int, int, int], nclasses: int,
-                 nz: int, ngf: int) -> None:
-        super(Generator, self).__init__()
+class GenericGenerator(nn.Module):
+    def __init__(self,
+                 in_size: Tuple[int, int, int],
+                 nclasses: int,
+                 nz: int,
+                 ngf: int,
+                 nperf: int = 0) -> None:
+        super(GenericGenerator, self).__init__()
+        self.in_size = in_size
+        self.nclasses = nclasses
+        self.nz = nz
+        self.ngf = ngf
+        self.nperf = nperf
+
+        self.classrange = torch.arange(nclasses, dtype=torch.long)
+        self.classeye = torch.eye(nclasses)
+
+        if nperf > 0:
+            self.perf_features = dist.Normal(torch.linspace(0, 100, nperf), 3)
+        else:
+            self.perf_features = None
+
+    def to(self, device):
+        self.classrange = self.classrange.to(device)
+        self.classeye = self.classeye.to(device)
+        return super(GenericGenerator, self).to(device)
+
+    def forward(self,
+                target: torch.Tensor = None,
+                nsamples: int = None,
+                mean: torch.Tensor = None,
+                log_var: torch.Tensor = None,
+                tmask: torch.Tensor = None,
+                perf: float = None):
+        device = self.classeye.device
+        if target is None:
+            if mean is not None and log_var is not None:
+                nsamples = mean.size(0)
+            elif nsamples is None:
+                raise RuntimeError("Specify one of: nsamples, (mean, log_var)")
+
+            target = torch.randint(self.nclasses, (nsamples,),
+                                   device=device, dtype=torch.long)
+
+        cond = self.classeye[target]
+        if tmask is not None:
+            cond *= tmask.unsqueeze(1)
+
+        batch_size = cond.size(0)
+        noise = torch.randn(batch_size, self.nz, device=device)
+        if mean is not None and log_var is not None:
+            noise = noise * torch.exp(.5 * log_var) + mean
+
+        if self.perf_features is not None:
+            pf = self.perf_features.log_prob(perf).exp()\
+                     .unsqueeze(0).repeat(batch_size, 1).to(device)
+            all_latent = (cond, noise, pf)
+        else:
+            all_latent = (cond, noise)
+
+        z = torch.cat(all_latent, dim=1).unsqueeze(2).unsqueeze(3)
+        x = self._model_forward(z, noise.unsqueeze(2).unsqueeze(3))
+
+        return torch.tanh(x), target
+
+    def _model_forward(self, z, noise):
+        raise NotImplementedError
+
+
+class ConvGenerator(GenericGenerator):
+    def __init__(self,
+                 in_size: Tuple[int, int, int],
+                 nclasses: int,
+                 nz: int,
+                 ngf: int,
+                 nperf: int = 0) -> None:
+        super(ConvGenerator, self).__init__(in_size, nclasses, nz, ngf, nperf)
         nc, _, _ = in_size
+        ninput = nz + nclasses + nperf
+
         self.generator = nn.Sequential(
-            nn.ConvTranspose2d(nz + nclasses, ngf * 4, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(ninput, ngf * 4, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
             nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
@@ -71,55 +147,23 @@ class Generator(nn.Module):
             nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False)
         )
 
-        self.nz = nz
-        self.classrange = torch.arange(nclasses).long()
-        self.classeye = torch.eye(nclasses)
-
-    # pylint: disable=arguments-differ
-    def to(self, device) -> nn.Module:
-        self.classrange = self.classrange.to(device)
-        self.classeye = self.classeye.to(device)
-        return super(Generator, self).to(device)
-
-    # pylint: disable=arguments-differ
-    def forward(self, target: torch.Tensor = None,
-                nsamples: int = None,
-                mean: torch.Tensor = None,
-                log_var: torch.Tensor = None,
-                tmask: torch.Tensor = None):
-        device = self.classeye.device
-        if target is not None:
-            cond = self.classeye[target]
-            if tmask is not None:
-                cond *= tmask.unsqueeze(1)
-        elif nsamples is not None:
-            target = torch.randint(10, (nsamples,), device=device).long()
-            cond = self.classeye[target]
-        elif mean is not None and log_var is not None:
-            target = torch.randint(10, (mean.size(0),), device=device).long()
-            cond = self.classeye[target]
-        else:
-            cond = self.classeye
-            target = self.classrange
-
-        batch_size = cond.size(0)
-        noise = torch.randn(batch_size, self.nz, device=cond.device)
-        if mean is not None and log_var is not None:
-            noise = noise * torch.exp(.5 * log_var) + mean
-        z = torch.cat((cond.detach(), noise), dim=1).unsqueeze(2).unsqueeze(3)
-        x = self.generator(z)
-
-        return torch.tanh(x), target
+    def _model_forward(self, z, _noise):
+        return self.generator(z)
 
 
-class SkipGenerator(nn.Module):
-    def __init__(self, in_size: Tuple[int, int, int], nclasses: int,
-                 nz: int, ngf: int) -> None:
-        super(SkipGenerator, self).__init__()
+class SkipGenerator(GenericGenerator):
+    def __init__(self,
+                 in_size: Tuple[int, int, int],
+                 nclasses: int,
+                 nz: int,
+                 ngf: int,
+                 nperf: int = 0) -> None:
+        super(SkipGenerator, self).__init__(in_size, nclasses, nz, ngf, nperf)
         nc, _, _ = in_size
+        ninput = nz + nclasses + nperf
         self.pairs = pairs = [
             (nn.Sequential(
-                nn.ConvTranspose2d(nz + nclasses, ngf * 4, 4, 1, 0, bias=False),
+                nn.ConvTranspose2d(ninput, ngf * 4, 4, 1, 0, bias=False),
                 nn.BatchNorm2d(ngf * 4),
                 nn.ReLU(True),
                 nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False)),
@@ -140,47 +184,7 @@ class SkipGenerator(nn.Module):
             if skip is not None:
                 setattr(self, f"skip_{idx:d}", skip)
 
-        self.nz = nz
-        self.classrange = torch.arange(nclasses).long()
-        self.classeye = torch.eye(nclasses)
-
-    # pylint: disable=arguments-differ
-    def to(self, device) -> nn.Module:
-        self.classrange = self.classrange.to(device)
-        self.classeye = self.classeye.to(device)
-        return super(SkipGenerator, self).to(device)
-
-    # pylint: disable=arguments-differ
-    def forward(self, target: torch.Tensor = None,
-                nsamples: int = None,
-                mean: torch.Tensor = None,
-                log_var: torch.Tensor = None,
-                tmask: torch.Tensor = None):
-        device = self.classeye.device
-        if target is not None:
-            cond = self.classeye[target]
-            if tmask is not None:
-                cond *= tmask.unsqueeze(1)
-        elif nsamples is not None:
-            target = torch.randint(10, (nsamples,), device=device).long()
-            cond = self.classeye[target]
-        elif mean is not None and log_var is not None:
-            target = torch.randint(10, (mean.size(0),), device=device).long()
-            cond = self.classeye[target]
-        else:
-            cond = self.classeye
-            target = self.classrange
-
-        batch_size = cond.size(0)
-        noise = torch.randn(batch_size, self.nz, device=cond.device)
-        if mean is not None and log_var is not None:
-            noise = noise * torch.exp(.5 * log_var) + mean
-        z = torch.cat((cond.detach(), noise), dim=1).unsqueeze(2).unsqueeze(3)
-        x = self.model_forward(z, noise.unsqueeze(2).unsqueeze(3))
-
-        return torch.tanh(x), target
-
-    def model_forward(self, z: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    def _model_forward(self, z, noise):
         x = z
         for layer, skip in self.pairs:
             x = layer(x)
@@ -203,6 +207,5 @@ class OutputDiscriminator(nn.Module):
             nn.Sigmoid()
         )
 
-    # pylint: disable=arguments-differ
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)

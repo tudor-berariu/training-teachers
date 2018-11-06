@@ -1,6 +1,5 @@
 from itertools import chain
 from collections import OrderedDict
-from typing import List
 import os.path
 from argparse import Namespace
 from tabulate import tabulate
@@ -14,13 +13,159 @@ import torch.autograd as autograd
 
 from models import Student
 from models import get_model
-from models import generative
-from agents.learning_agent import LearningAgent
+from models import generative, classifiers
+from models.classifiers import sample_classifier
+from professors.professor import Professor
 
-from utils import get_optimizer, print_nparams, grad_info
+from utils import get_optimizer, nparams, grad_info
 from loss_utils import cos, mse, l2
 
 from torchvision.utils import save_image
+
+
+"""
+
+    if nstudents > 1:
+        if isinstance(args.reset_student, list):
+            if len(args.reset_student) == nstudents:
+                reset_student_freq = args.reset_student[1:]
+            elif len(args.reset_student) == nstudents - 1:
+                reset_student_freq = args.reset_student
+            else:
+                raise ValueError("Reset times must match no. of students.")
+        elif isinstance(args.reset_student, int):
+            reset_student_freq = [args.reset_student] * (nstudents - 1)
+        elif args.reset_student in ["linspace", "powspace", "every_step"]:
+            reset_student_freq = args.reset_student
+        else:
+            raise ValueError("Expected int or list of ints. Got" +
+                             str(args.reset_student))
+    else:
+        reset_student_freq = False
+
+    student_accs_trace = [.0] * nstudents
+
+    if hasattr(llargs, "students_trained_on_real_data"):
+        students_trained_on_real_data = llargs.students_trained_on_real_data
+        assert students_trained_on_real_data > 0
+    elif llargs.student_train_on_fake:
+        students_trained_on_real_data = 1
+    else:
+        students_trained_on_real_data = nstudents
+
+            for student_optimizer in student_optimizers:
+                student_optimizer.zero_grad()
+
+
+
+            if args.debug:
+                print("[MAIN_][DEBUG] Student 0:")
+                print(tabulate(grad_info(students[0])))
+
+            for student_optimizer in student_optimizers:
+                student_optimizer.step()
+
+            student_trace.append(student_losses[0])
+            all_students_trace.extend(student_losses)
+            for name, value in prof_losses.items():
+                professor_trace.setdefault(name, []).append(value)
+
+
+            for sidx, sacc in student_accs.items():
+                student_accs_trace[sidx] *= .8
+                student_accs_trace[sidx] += .2 * sacc
+
+            to_reset = []
+
+            if True:
+                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
+                      "   " +
+                      clr("  ".join([f"{acc:5.2f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
+                      " | " +
+                      "  ".join([f"{acc:5.2f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
+                      "   " +
+                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
+
+            if reset_student_freq == "every_step":
+                to_reset = list(range(nstudents))
+            elif isinstance(reset_student_freq, str):
+                ref_acc = student_accs_trace[0]
+
+                to_reset_1, to_reset_2 = [], []
+                if students_trained_on_real_data > 1:
+                    to_reset_1 = what_to_reset(ref_acc, nclasses,
+                                               reset_student_freq,
+                                               student_accs_trace,
+                                               (1, students_trained_on_real_data))
+                if students_trained_on_real_data < nstudents:
+                    to_reset_2 = what_to_reset(ref_acc, nclasses,
+                                               reset_student_freq,
+                                               student_accs_trace,
+                                               (students_trained_on_real_data, nstudents))
+                to_reset = to_reset_1 + to_reset_2
+
+            else:
+                # Stochastic reset
+                for sidx, freq in zip(range(1, nstudents), reset_student_freq):
+                    p_reset = len(data) / freq
+                    if np.random.sample() < p_reset:
+                        to_reset.append(sidx)
+
+            for sidx in to_reset:
+                # print("[MAIN_] Reset student", sidx)
+
+                if not args.random_params:
+                    student[sidx].load_state_dict(state_dict)
+                elif args.random_students:
+                    students[sidx] = sample_classifier(in_size,
+                                                       nclasses).to(device)
+                else:
+                    students[sidx] = get_model(classifiers, args.student,
+                                               in_size=in_size,
+                                               nclasses=nclasses).to(device)
+                if args.professor_starts_student:
+                    agent.init_student(students[sidx], args.student_optimizer)
+                student_optimizers[sidx] = get_optimizer(students[sidx].parameters(),
+                                                         args.student_optimizer)
+                student_accs_trace[sidx] = 0
+
+            if seen_examples - last_seen >= args.log_interval:
+
+                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
+                      "   " +
+                      clr("  ".join([f"{acc:4.1f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
+                      " | " +
+                      "  ".join([f"{acc:4.1f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
+                      "   " +
+                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
+
+                details = [("Epoch", epoch + 1),
+                           ("Progress (%)", 100. * (batch_idx + 1) / len(train_loader)),
+                           ("Student 0", np.mean(student_trace)),
+                           ("All students", np.mean(all_students_trace))]
+                details.extend([(n, np.mean(vals)) for (n, vals) in professor_trace.items()])
+                print(tabulate(details))
+                student_trace.clear()
+                all_students_trace.clear()
+                professor_avg_trace.setdefault("seen", []).append(seen_examples)
+                for info, values in professor_trace.items():
+                    professor_avg_trace.setdefault(info, []).append(np.mean(values))
+
+                professor_trace.clear()
+                last_seen += args.log_interval
+
+        with open(os.path.join(args.out_dir, f"trace.th"), 'wb') as handle:
+            pickle.dump(professor_avg_trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+    student_trace = []
+    all_students_trace = []
+    professor_trace = OrderedDict({})
+    professor_avg_trace = dict({})
+
+
+
+"""
 
 
 def grad_of(outputs, inputs, grad_outputs=None):
@@ -35,45 +180,71 @@ def grad_of(outputs, inputs, grad_outputs=None):
                          only_inputs=True)
 
 
-class GenerativeAgent(LearningAgent):
-    # pylint: disable=too-many-instance-attributes
+def what_to_reset(ref_acc: float, nclasses, strategy, accs, ends):
+    to_reset = []
+    start_idx, end_idx = ends
+    nstudents = len(accs[start_idx:end_idx])
 
-    def __init__(self, students: List[Student], args: Namespace) -> None:
-        self.students = students
+    if ref_acc > 150. / nclasses:
+        if strategy == "powspace":
+            thrs = np.power(np.linspace(np.power((150. / nclasses), np.e),
+                                        np.power(ref_acc, np.e),
+                                        nstudents),
+                            1/np.e)
+        else:
+            thrs = np.linspace((150. / nclasses),
+                               (ref_acc),
+                               nstudents)
+        thrs = thrs[1:]
+        balance = 0
+        prev_idxs = []
+        for thr in thrs[::-1]:
+            good_idxs = []
+            for sidx in range(start_idx, end_idx):
+                if sidx not in prev_idxs and accs[sidx] > thr:
+                    good_idxs.append(sidx)
+            np.random.shuffle(good_idxs)
+            balance += len(good_idxs) - 1
+            if balance > 0:
+                to_reset.append(np.random.choice(good_idxs))
+                balance -= 1
+            while balance > 0:
+                good_idxs.pop()
+                balance -= 1
+            prev_idxs.extend(good_idxs)
+
+    return to_reset
+
+
+class GenerativeProfessor(Professor):
+
+    def __init__(self, args: Namespace, device, start_params=None) -> None:
+        super(GenerativeProfessor, self).__init__("GENE-PROF", args.verbose)
         self.args = args
-        self.in_size = args.in_size
-        self.nclasses = args.nclasses
+        self.nclasses = nclasses = args.nclasses
+        self.in_size = in_size = args.in_size
+        self.nrmlz = args.nrmlz
+        self.crt_device = device
+        self.start_params = start_params
+
+        self._init_students()
+
         self.generator_idx = 0
 
         self.generator, self.encoder, self.discriminator = None, None, None
         self.d_optimizer, self.prof_optimizer = None, None
         self.old_generator = None
 
-        self.classeye = torch.eye(args.nclasses)
+        self.classeye = torch.eye(args.nclasses, device=device)
+
+        self.trained_on_fake = args.trained_on_fake
+        if args.trained_on_fake > len(self.students):
+            raise ValueError("Trained on fake more than existing.")
 
         # ----------------------------------------------------------------------
-        # drop this as soon as you can (for backward compatibility)
 
-        if hasattr(args, "label_to_discriminator"):
-            self.label_to_discriminator = args.label_to_discriminator
-        else:
-            self.label_to_discriminator = True
-
-        if hasattr(args, "permute_discriminator_inputs"):
-            self.permute_discriminator_inputs = args.permute_discriminator_inputs
-        else:
-            self.permute_discriminator_inputs = False
-
-        if hasattr(args, "students_trained_on_real_data"):
-            self.students_trained_on_real_data = args.students_trained_on_real_data
-            assert self.students_trained_on_real_data > 0
-            args.student_train_on_fake = args.students_trained_on_real_data < len(students)
-        elif args.student_train_on_fake:
-            self.students_trained_on_real_data = 1
-        else:
-            self.students_trained_on_real_data = len(students)
-
-        # ----------------------------------------------------------------------
+        self.label_to_discriminator = args.label_to_discriminator
+        self.permute_before_discriminator = args.permute_before_discriminator
 
         self._create_components()
 
@@ -106,6 +277,7 @@ class GenerativeAgent(LearningAgent):
 
         w_contrast = ["c_contrast_kl", "c_contrast_next_nll"]
         self.need_contrast = check_need(w_contrast)
+        self.info("Contrast data will be generated.")
 
         w_real_grad = ["c_grad_mse", "c_grad_cos", "c_next_nll2", "c_hess"]
         self.need_real_grad = check_need(w_real_grad)
@@ -117,6 +289,9 @@ class GenerativeAgent(LearningAgent):
         w_contrast_grad = ["c_contrast_next_nll"]
         self.need_contrast_grad = check_need(w_contrast_grad)
 
+        self.need_some_grad = self.need_fake_grad or self.need_real_grad or \
+                              self.need_contrast_grad
+
         # ---------------------------------------------------------------------
 
         self.grad_type = args.grad_type
@@ -126,26 +301,49 @@ class GenerativeAgent(LearningAgent):
         else:
             self.grad_samples = None
 
-        self.student_train_on_fake = args.student_train_on_fake
-
-        self.crt_device = None
         self.eval_samples = args.eval_samples
-        self.debug = args.debug
+
+        # ---------------------------------------------------------------------
+
+        self.student_perf_trace = [1.0 / nclasses] * len(self.students)
+
+    def _init_students(self):
+        in_size, nclasses = self.in_size, self.nclasses
+        self.students, self.student_optimizers = [], []
+        for idx in range(self.args.nstudents):
+            if not self.args.random_students:
+                student = get_model(classifiers, self.args.student,
+                                    in_size=in_size,
+                                    nclasses=nclasses).to(self.crt_device)
+                if self.start_params:
+                    student.load_state_dict(self.start_params)
+            else:
+                student = sample_classifier(in_size, nclasses).to(self.crt_device)
+            student_optimizer = get_optimizer(student.parameters(),
+                                              self.args.student_optimizer)
+            self.students.append(student)
+            self.student_optimizers.append(student_optimizer)
+            self.info(nparams(student, name="Student model"))
 
     def _create_components(self):
         args = self.args
-        self.generator = get_model(generative, args.generator,
+        self.generator = get_model(generative,
+                                   args.generator,
                                    in_size=self.in_size,
                                    nclasses=self.nclasses,
-                                   nz=args.nz)
-        print_nparams(self.generator, name=f"Generator:{self.generator_idx:d}")
+                                   nz=args.nz,
+                                   nperf=args.nperf)
+        self.generator.to(self.crt_device)
+        self.info(nparams(self.generator,
+                          name=f"Generator:{self.generator_idx:d}"))
 
         if hasattr(args, "encoder") and args.c_latent_kl > 0:
             self.encoder = get_model(generative, args.encoder,
                                      in_size=args.in_size, nz=args.nz)
+            self.encoder.to(self.crt_device)
             all_params = chain(self.encoder.parameters(),
                                self.generator.parameters())
-            print_nparams(self.encoder, name=f"Encoder")
+            self.info(nparams(self.encoder, name=f"Encoder"))
         else:
             all_params = self.generator.parameters()
 
@@ -155,9 +353,12 @@ class GenerativeAgent(LearningAgent):
             discriminator = get_model(generative, args.discriminator,
                                       nclasses=args.nclasses,
                                       use_labels=self.label_to_discriminator)
+            discriminator.to(self.crt_device)
             self.discriminator = discriminator
             self.bce_loss = nn.BCELoss()
             self.d_optimizer = optim.Adam(discriminator.parameters(), lr=.001)
+
+            self.info(nparams(self.encoder, name=f"Discriminator"))
 
     def to(self, device):  # pylint: disable=invalid-name
         self.crt_device = device
@@ -179,8 +380,9 @@ class GenerativeAgent(LearningAgent):
 
         output = student(data)
 
-        pred = output.max(1, keepdim=True)[1]
-        correct = pred.eq(target.view_as(pred)).sum().item()
+        with torch.no_grad():
+            pred = output.max(1, keepdim=True)[1]
+            correct = pred.eq(target.view_as(pred)).sum().item()
 
         return F.cross_entropy(output, target), (correct / len(data) * 100)
 
@@ -209,6 +411,7 @@ class GenerativeAgent(LearningAgent):
             save_image(all_data,
                        os.path.join(out_path, f"recons_{epoch_no:04d}.png"))
 
+    """
     def end_task(self, is_last: bool = False) -> None:
         if is_last:
             return
@@ -220,6 +423,7 @@ class GenerativeAgent(LearningAgent):
         self.generator_idx += 1
 
         self._create_components()
+
 
     def init_student(self, student, optimizer_args, nsteps: int = None):
         if nsteps is None:
@@ -250,90 +454,96 @@ class GenerativeAgent(LearningAgent):
                   f"with Synthetic NLL={loss:.3f} and "
                   f"Accuracy: {acc:.2f}%")
         student.zero_grad()
+    """
 
-    # pylint: disable=too-many-statements,too-many-branches,too-many-locals
-    def process(self, data, target, nrmlz):
-        nstudents = len(self.students)
+    def process(self, data, target):
         student_losses = []
         info = OrderedDict({})
         coeffs = self.coeffs
         encoder = self.encoder
         generator = self.generator
 
-        # -----------------------------------------------------------------
-        #
-        # If there is an old generator, we just add some synthetic
-        # data for previous tasks. The batch size gets doubled.
-
-        if self.old_generator is not None:
-            with torch.no_grad():
-                prev_data, prev_target = self.old_generator(nsamples=len(data))
-            data = torch.cat((data, prev_data.detach()), dim=0)
-            target = torch.cat((target, prev_target.detach()), dim=0)
-            del prev_data, prev_target
-
-        # -----------------------------------------------------------------
-        #
-        # Generate data for current task
-
-        if coeffs.target_dropout > 0:
-            tmask = torch.bernoulli(torch.full(target.size(),
-                                               coeffs.target_dropout))
-            tmask = tmask.to(target.device)
-        else:
-            tmask = None
-
-        if encoder is not None:
-            mean, log_var = encoder(data)
-            fake_data, _target = generator(target, mean=mean, log_var=log_var,
-                                           tmask=tmask)
-        else:
-            fake_data, _target = generator(target, tmask=tmask)
-
-        if self.need_contrast:
-            with torch.no_grad():
-                contrast_data, _target = generator(target, tmask=tmask)
-        else:
-            contrast_data = None
-
-        # -----------------------------------------------------------------
-        #
-        # We erase gradients in both generator and encoder. If any
-        # loss function is used, optimizer_generator will be True
-        # after finishing processing students.
-
-        self.prof_optimizer.zero_grad()
-        optimize_generator = False
-
-        # -----------------------------------------------------------------
-        #
-        # Before doing stuff with the fake data, normalize the
-        # posterior. This will put some gradients in the encoder.
-
-        if encoder is not None:
-            code = (mean, log_var)
-            kld, recon_loss = self._do_vae(code, data, fake_data, nrmlz)
-
-            if torch.is_tensor(recon_loss):
-                info["Reconstruction"] = recon_loss.item() * nstudents
-            info["KL encoder"] = kld.item() * nstudents
-
-            (recon_loss + kld).backward(retain_graph=True)
-            optimize_generator = True
-
-            del code, kld, recon_loss
 
         # ---------------------------------------------------------------------
         #
         # If gradients are computed per example, we'll take a fixed
         # number of samples for each student.
 
-        if self.grad_type == "example":
+        if self.grad_type == "example" and self.need_some_grad:
             ngrad_samples = min(len(data), self.grad_samples)
 
         nstudents = len(self.students)  # type: int
-        student_accs = OrderedDict({})
+
         for sidx, student in enumerate(self.students):
+
+            perf = self.student_perf_trace[sidx]
+
+            # -----------------------------------------------------------------
+            #
+            # If there is an old generator, we just add some synthetic
+            # data for previous tasks. The batch size gets doubled.
+
+            if self.old_generator is not None:
+                with torch.no_grad():
+                    prev_data, prev_target = self.old_generator(
+                        nsamples=len(data), perf=perf)
+                data = torch.cat((data, prev_data.detach()), dim=0)
+                target = torch.cat((target, prev_target.detach()), dim=0)
+                del prev_data, prev_target
+
+            # -----------------------------------------------------------------
+            #
+            # Generate data for current task
+
+            if coeffs.target_dropout > 0:
+                tmask = torch.bernoulli(torch.full(target.size(),
+                                                   coeffs.target_dropout))
+                tmask = tmask.to(target.device)
+            else:
+                tmask = None
+
+            if encoder is not None:
+                mean, log_var = encoder(data)
+                fake_data, _target = generator(target, mean=mean,
+                                               log_var=log_var,
+                                               tmask=tmask,
+                                               perf=perf)
+            else:
+                fake_data, _target = generator(target, tmask=tmask, perf=perf)
+
+            if self.need_contrast:
+                with torch.no_grad():
+                    contrast_data, _target = generator(target, tmask=tmask,
+                                                       perf=perf)
+            else:
+                contrast_data = None
+
+            # -----------------------------------------------------------------
+            #
+            # We erase gradients in both generator and encoder. If any
+            # loss function is used, optimizer_generator will be True
+            # after finishing processing students.
+
+            self.prof_optimizer.zero_grad()
+            optimize_generator = False
+
+            # -----------------------------------------------------------------
+            #
+            # Before doing stuff with the fake data, normalize the
+            # posterior. This will put some gradients in the encoder.
+
+            if encoder is not None:
+                code = (mean, log_var)
+                kld, recon_loss = self._do_vae(code, data, fake_data)
+
+                if torch.is_tensor(recon_loss):
+                    info["Reconstruction"] = recon_loss.item() * nstudents
+                info["KL encoder"] = kld.item() * nstudents
+
+                (recon_loss + kld).backward(retain_graph=True)
+                optimize_generator = True
+
+                del code, kld, recon_loss
 
             # -----------------------------------------------------------------
             #
@@ -346,9 +556,11 @@ class GenerativeAgent(LearningAgent):
             real_nlls = F.cross_entropy(real_output, target, reduction="none")
             fake_nlls = F.cross_entropy(fake_output, target, reduction="none")
 
-            real_pred = real_output.max(1, keepdim=True)[1]
-            correct = real_pred.eq(target.view_as(real_pred)).sum().item()
-            student_accs[sidx] = correct / len(data) * 100
+            _, real_pred = real_output.max(1)
+            real_acc = real_pred.eq(target).sum().item() / len(data) * 100
+
+            _, fake_pred = fake_output.max(1)
+            fake_acc = fake_pred.eq(target).sum().item() / len(data) * 100
 
             if self.need_contrast:
                 if self.need_contrast_grad:
@@ -368,7 +580,7 @@ class GenerativeAgent(LearningAgent):
             # backpropagate the professor loss, clean the student's
             # gradients and then backpropagate this nll.
 
-            if sidx < self.students_trained_on_real_data:
+            if sidx < nstudents - self.trained_on_fake:
                 student_loss = real_nlls.mean()
             else:
                 student_loss = fake_nlls.mean()
@@ -384,8 +596,12 @@ class GenerativeAgent(LearningAgent):
             # Compute gradients w.r.t. student's parameters for both
             # fake, and real examples.
 
-            if self.need_fake_grad or self.need_real_grad or self.need_contrast_grad:
-                idxs = [i for i in range(ngrad_samples) if i % nstudents == sidx]
+            if self.need_some_grad:
+                if self.grad_type == "example":
+                    idxs = [i for i in range(ngrad_samples)
+                            if i % nstudents == sidx]
+                else:
+                    idxs = None
                 aligned_grads = self._get_aligned_grads(student,
                                                         real_nlls, fake_nlls,
                                                         contrast_nlls,
@@ -535,12 +751,12 @@ class GenerativeAgent(LearningAgent):
 
             if torch.is_tensor(professor_loss):
                 if torch.isnan(professor_loss).any().item():
-                    return None, None  # Exit if parameters are garbage
+                    return True
                 optimize_generator = True
                 professor_loss /= nstudents
                 professor_loss.backward(retain_graph=True)
 
-            if sidx < self.students_trained_on_real_data:
+            if sidx < nstudents - self.trained_on_fake:
                 student.zero_grad()
                 student_loss.backward()
             else:
@@ -553,27 +769,34 @@ class GenerativeAgent(LearningAgent):
 
             del professor_loss, student_loss
 
+            self.student_optimizers[sidx].step()
+
             # Backpropagation ended for current student.
             #
             # -----------------------------------------------------------------
 
-        # -- If there is some loss, improve teacher
+            # -- If there is some loss, improve teacher
 
-        if optimize_generator:
-            if self.debug:
-                generator_info = grad_info(generator)
-                print(tabulate(generator_info))
+            if optimize_generator:
+                if False:
+                    generator_info = grad_info(generator)
+                    print(tabulate(generator_info))
 
-                if encoder is not None:
-                    encoder_info = grad_info(encoder)
-                    print(tabulate(encoder_info))
+                    if encoder is not None:
+                        encoder_info = grad_info(encoder)
+                        print(tabulate(encoder_info))
+                self.prof_optimizer.step()
 
-            for key in info.keys():
-                info[key] /= nstudents
+            # -----------------------------------------------------------------
+            #
+            # -- Post computation
 
-            self.prof_optimizer.step()
+            self.student_perf_trace[sidx] *= .75
+            self.student_perf_trace[sidx] += .25 * fake_acc
 
-        return student_losses, student_accs, info
+            print(real_acc)
+
+        return False
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
@@ -694,8 +917,8 @@ class GenerativeAgent(LearningAgent):
                     if self.need_contrast_grad:
                         contrast_nll_i = contrast_nlls[mask].mean()
                         contrast_g = grad_of(contrast_nll_i, student.parameters())
-                    for cgrad in contrast_g:
-                        cgrad.detach_()
+                        contrast_g = tuple([cg.detach() for cg in contrast_g])
+
                     aligned_grads.append((real_g, fake_g, contrast_g, mask))
         else:
             if idxs is None:
@@ -724,7 +947,7 @@ class GenerativeAgent(LearningAgent):
 
         self.d_optimizer.zero_grad()
 
-        if self.permute_discriminator_inputs:
+        if self.permute_before_discriminator:
             with torch.no_grad():
                 perm = torch.randperm(self.nclasses).long().to(real_output.device)
                 perm_real = real_output.index_select(1, perm)
@@ -772,10 +995,10 @@ class GenerativeAgent(LearningAgent):
 
         return d_gen_loss * self.coeffs.c_d, info
 
-    def _do_vae(self, code, data, fake_data, nrmlz):
+    def _do_vae(self, code, data, fake_data):
         mean, log_var = code
         if self.coeffs.c_recon > 0:
-            data_mean, data_std = nrmlz
+            data_mean, data_std = self.nrmlz
             batch_size = len(data)
             with torch.no_grad():
                 scaled_data = data_mean + data * data_std

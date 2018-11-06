@@ -14,7 +14,7 @@ import models.loss_predictors as loss_predictors  # pylint: disable=unused-impor
 
 def get_model(module, model_args, *args, **kwargs):
     margs = get_kwargs(model_args)
-    print("[MODEL] Initializing a", clr(model_args.name, 'red'), "with", margs)
+    # print("[MODEL] Initializing a", clr(model_args.name, 'red'), "with", margs)
     return getattr(module, model_args.name)(*args, **margs, **kwargs)
 
 

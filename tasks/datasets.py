@@ -10,6 +10,7 @@ from torchvision import datasets, transforms
 
 
 ORIGINAL_SIZE = {"FashionMNIST": (1, 28, 28)}
+NCLASSES = {"FashionMNIST": 10}
 MEAN_STD = {"FashionMNIST": {(1, 32, 32): (0.2190, 0.3318,),
                              (1, 28, 28): (0.2860, 0.3530,)}}
 
@@ -18,7 +19,7 @@ Size = Tuple[int, int, int]
 Padding = Tuple[int, int, int, int]
 
 
-class InMemoryDataLoader(object):
+class InMemoryDataLoader(Iterator):
     # Only for small datasets
 
     def __init__(self, loader: DataLoader,
@@ -38,12 +39,13 @@ class InMemoryDataLoader(object):
         self.length = len(self.data)
         self.idxs, self.offset = None, None
 
+    # pylint: disable=invalid-name
     def to(self, device: torch.device) -> None:
         self.data, self.target = self.data.to(device), self.target.to(device)
 
     def __iter__(self) -> Iterator[Tuple[Tensor, Tensor]]:
         if self.shuffle:
-            self.idxs = torch.randperm(self.data.size(0))
+            self.idxs = torch.randperm(self.length)
         self.offset = 0
         return self
 
@@ -63,6 +65,14 @@ class InMemoryDataLoader(object):
     def __len__(self) -> int:
         return int(ceil(self.length / self.batch_size))
 
+    def sample(self, nsamples: int) -> Tensor:
+        if nsamples > self.length:
+            raise ValueError("You ask for too much.")
+        idxs = torch.randint(self.length, (nsamples,),
+                             dtype=torch.long, device=self.data.device)
+        return {"data": self.data.index_select(0, idxs),
+                "target": self.target.index_select(0, idxs)}
+
 
 def get_padding(in_size: Size, out_size: Size) -> Padding:
     d_h, d_w = out_size[-2] - in_size[-2], out_size[-1] - in_size[-1]
@@ -71,19 +81,15 @@ def get_padding(in_size: Size, out_size: Size) -> Padding:
     return (p_h1, p_h2, p_w1, p_w2)
 
 
-def get_loaders(batch_size: int,
+def get_loaders(dataset: str,
+                batch_size: int,
                 test_batch_size: int,
-                use_cuda: bool,
-                dataset: str = "FashionMNIST",
-                in_size: Size = None,
-                in_memory: bool = True):
-
+                in_size: Size = None):
     if in_size is None:
         in_size = (1, 32, 32)
     padding = get_padding(ORIGINAL_SIZE[dataset], in_size)
     mean, std, = MEAN_STD[dataset][in_size]
 
-    kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
     trainset = getattr(datasets, dataset)(
         f'./.data/{dataset:s}',
         train=True, download=True,
@@ -93,24 +99,19 @@ def get_loaders(batch_size: int,
             transforms.Lambda(lambda t: t.expand(in_size)),
             transforms.Normalize((mean,), (std,))
         ]))
-    train_loader = DataLoader(
-        trainset,
-        batch_size=(len(trainset) if in_memory else batch_size), shuffle=True,
-        **kwargs)
-    test_loader = DataLoader(
-        getattr(datasets, dataset)(
-            f'./.data/{dataset:s}',
-            train=False,
-            transform=transforms.Compose([
-                transforms.Pad(padding),
-                transforms.ToTensor(),
-                transforms.Lambda(lambda t: t.expand(in_size)),
-                transforms.Normalize((mean,), (std,))
-            ])),
-        batch_size=test_batch_size, shuffle=False, **kwargs)
+    train_loader = DataLoader(trainset, batch_size=len(trainset))
+    testset = getattr(datasets, dataset)(
+        f'./.data/{dataset:s}',
+        train=False,
+        transform=transforms.Compose([
+            transforms.Pad(padding),
+            transforms.ToTensor(),
+            transforms.Lambda(lambda t: t.expand(in_size)),
+            transforms.Normalize((mean,), (std,))
+        ]))
+    test_loader = DataLoader(testset, batch_size=len(testset), shuffle=False)
 
-    if in_memory:
-        train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True)
-        test_loader = InMemoryDataLoader(test_loader, test_batch_size)
+    train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True)
+    test_loader = InMemoryDataLoader(test_loader, test_batch_size)
 
-    return train_loader, test_loader, (in_size, 10, (mean, std))
+    return train_loader, test_loader, (in_size, NCLASSES[dataset], (mean, std))
