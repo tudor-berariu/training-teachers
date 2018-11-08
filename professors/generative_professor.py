@@ -24,63 +24,6 @@ from loss_utils import cos, mse, l2
 from torchvision.utils import save_image
 
 
-"""
-    TODO: Fix reporting and that's it.
-
-            student_trace.append(student_losses[0])
-            all_students_trace.extend(student_losses)
-            for name, value in prof_losses.items():
-                professor_trace.setdefault(name, []).append(value)
-
-
-            if True:
-                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
-                      "   " +
-                      clr("  ".join([f"{acc:5.2f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
-                      " | " +
-                      "  ".join([f"{acc:5.2f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
-                      "   " +
-                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
-
-
-
-            if seen_examples - last_seen >= args.log_interval:
-
-                print(clr(f"{student_accs_trace[0]:5.2f}", "red") +
-                      "   " +
-                      clr("  ".join([f"{acc:4.1f}" for acc in student_accs_trace[1:students_trained_on_real_data]]), "blue") +
-                      " | " +
-                      "  ".join([f"{acc:4.1f}" for acc in student_accs_trace[students_trained_on_real_data:]]) +
-                      "   " +
-                      clr(f"{max(student_accs_trace[students_trained_on_real_data:]):5.2f}", "yellow"))
-
-                details = [("Epoch", epoch + 1),
-                           ("Progress (%)", 100. * (batch_idx + 1) / len(train_loader)),
-                           ("Student 0", np.mean(student_trace)),
-                           ("All students", np.mean(all_students_trace))]
-                details.extend([(n, np.mean(vals)) for (n, vals) in professor_trace.items()])
-                print(tabulate(details))
-                student_trace.clear()
-                all_students_trace.clear()
-                professor_avg_trace.setdefault("seen", []).append(seen_examples)
-                for info, values in professor_trace.items():
-                    professor_avg_trace.setdefault(info, []).append(np.mean(values))
-
-                professor_trace.clear()
-                last_seen += args.log_interval
-
-        with open(os.path.join(args.out_dir, f"trace.th"), 'wb') as handle:
-            pickle.dump(professor_avg_trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-
-    student_trace = []
-    all_students_trace = []
-    professor_trace = OrderedDict({})
-    professor_avg_trace = dict({})
-
-"""
-
-
 def grad_of(outputs, inputs, grad_outputs=None):
     """Call autograd.grad with create & retain graph, and ignore other
        leaf variables.
