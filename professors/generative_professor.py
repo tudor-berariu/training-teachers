@@ -3,6 +3,7 @@ from collections import OrderedDict
 import os.path
 from argparse import Namespace
 from tabulate import tabulate
+from termcolor import colored as clr
 import numpy as np
 import torch
 from torch import Tensor
@@ -214,6 +215,7 @@ class GenerativeProfessor(Professor):
             self.grad_samples = None
 
         self.eval_samples = args.eval_samples
+        self.info(args.eval_samples, "samples will be used during teaching.")
 
         # ---------------------------------------------------------------------
 
@@ -232,8 +234,15 @@ class GenerativeProfessor(Professor):
 
         # ---------------------------------------------------------------------
 
-        self.student_perf_trace = [1.0 / nclasses] * len(self.students)
-        self.max_known_real_acc = 1.5 /nclasses
+        self.student_perf_trace = [100.0 / nclasses] * len(self.students)
+        self.student_real_perf_trace = [100.0 / nclasses] * len(self.students)
+        self.max_known_real_acc = 150 /nclasses
+        self.last_perf = None  # used during evaluation
+
+        self.info_trace = OrderedDict({})
+        self.nseen = 0
+        self.report_freq = args.report_freq
+        self.last_report = 0
 
     def _init_students(self):
         in_size, nclasses = self.in_size, self.nclasses
@@ -300,19 +309,25 @@ class GenerativeProfessor(Professor):
         if self.old_generator is not None:
             self.old_generator.to(device)
 
-    def eval_student(self, student: Student, nsamples: int = None) -> Tensor:
+    def eval_student(self, student: Student,
+                     step: int,
+                     nsamples: int = None) -> Tensor:
+        if step == 0:
+            self.last_perf = last_perf = 1 / self.nclasses
+        else:
+            last_perf = self.last_perf
         if nsamples is None:
             nsamples = self.eval_samples
         with torch.no_grad():
-            data, target = self.generator(nsamples=nsamples)
+            data, target = self.generator(nsamples=nsamples, perf=last_perf)
 
         output = student(data)
 
         with torch.no_grad():
             pred = output.max(1, keepdim=True)[1]
             correct = pred.eq(target.view_as(pred)).sum().item()
-
-        return F.cross_entropy(output, target), (correct / len(data) * 100)
+        self.last_perf = last_perf = (correct / len(data) * 100)
+        return F.cross_entropy(output, target), last_perf
 
     def save_state(self, out_path: str, epoch_no: int,
                    data=None, target=None) -> None:
@@ -326,7 +341,8 @@ class GenerativeProfessor(Professor):
 
         # 2. generate_some_images
         with torch.no_grad():
-            fake_data, _ = self.generator(nsamples=64)
+            fake_data, _ = self.generator(nsamples=64,
+                                          perf=torch.linspace(10, 90, 64))
             save_image(fake_data.cpu(),
                        os.path.join(out_path, f"samples_{epoch_no:04d}.png"))
 
@@ -334,7 +350,8 @@ class GenerativeProfessor(Professor):
 
         with torch.no_grad():
             mean, log_var = (None, None) if encoder is None else encoder(data)
-            fake_data, _target = generator(target, mean=mean, log_var=log_var)
+            fake_data, _target = generator(target, mean=mean, log_var=log_var,
+                                           perf=torch.linspace(10, 90, len(data)))
             all_data = torch.cat((data, fake_data), dim=0).cpu()
             save_image(all_data,
                        os.path.join(out_path, f"recons_{epoch_no:04d}.png"))
@@ -387,6 +404,7 @@ class GenerativeProfessor(Professor):
     def process(self, data, target):
         student_losses = []
         info = OrderedDict({})
+        info_max = OrderedDict({})
         coeffs = self.coeffs
         encoder = self.encoder
         generator = self.generator
@@ -465,8 +483,8 @@ class GenerativeProfessor(Professor):
                 kld, recon_loss = self._do_vae(code, data, fake_data)
 
                 if torch.is_tensor(recon_loss):
-                    info["Reconstruction"] = recon_loss.item() * nstudents
-                info["KL encoder"] = kld.item() * nstudents
+                    info["Reconstruction"] = recon_loss.item()
+                info["KL encoder"] = kld.item()
 
                 (recon_loss + kld).backward(retain_graph=True)
                 optimize_generator = True
@@ -488,6 +506,7 @@ class GenerativeProfessor(Professor):
             real_acc = real_pred.eq(target).sum().item() / len(data) * 100
 
             self.max_known_real_acc = max(real_acc, self.max_known_real_acc)
+            info_max["Max. Known Real Acc"] = self.max_known_real_acc
 
             _, fake_pred = fake_output.max(1)
             fake_acc = fake_pred.eq(target).sum().item() / len(data) * 100
@@ -683,39 +702,36 @@ class GenerativeProfessor(Professor):
                 if torch.isnan(professor_loss).any().item():
                     return True
                 optimize_generator = True
-                professor_loss /= nstudents
+                # professor_loss /= nstudents
                 professor_loss.backward(retain_graph=True)
-
-            if sidx < nstudents - self.trained_on_fake:
-                student.zero_grad()
-                student_loss.backward()
-            else:
-                for param in generator.parameters():
-                    param.requires_grad_(False)
-                student.zero_grad()
-                student_loss.backward(retain_graph=True)
-                for param in generator.parameters():
-                    param.requires_grad_(True)
-
-            del professor_loss, student_loss
-
-            self.student_optimizers[sidx].step()
-
-            # Backpropagation ended for current student.
-            #
-            # -----------------------------------------------------------------
 
             # -- If there is some loss, improve teacher
 
             if optimize_generator:
-                if False:
+                if self.verbose > 1:
                     generator_info = grad_info(generator)
                     print(tabulate(generator_info))
 
                     if encoder is not None:
                         encoder_info = grad_info(encoder)
                         print(tabulate(encoder_info))
+
                 self.prof_optimizer.step()
+
+            student.zero_grad()
+            if sidx < nstudents - self.trained_on_fake:
+                student_loss.backward()
+            else:
+                student_loss.backward(retain_graph=True)
+
+            self.student_optimizers[sidx].step()
+
+            del professor_loss, student_loss
+
+            # Backpropagation ended for current student.
+            #
+            # -----------------------------------------------------------------
+
 
             # -----------------------------------------------------------------
             #
@@ -723,9 +739,33 @@ class GenerativeProfessor(Professor):
 
             self.student_perf_trace[sidx] *= .75
             self.student_perf_trace[sidx] += .25 * fake_acc
+            self.student_real_perf_trace[sidx] *= .75
+            self.student_real_perf_trace[sidx] += .25 * real_acc
 
         self.reset_students(len(orig_data))
+
+        for key, value in info.items():
+            self.info_trace.setdefault(key, []).append(value / nstudents)
+
+        for key, value in info_max.items():
+            [old_value] = self.info_trace.get(key, [value])
+            self.info_trace[key] = [max(old_value, value)]
+
+        self.nseen = nseen = self.nseen + len(orig_data)
+        self.report()
         return False
+
+    def report(self):
+        if self.nseen - self.last_report >= self.report_freq:
+            t = [(key, np.mean(vals)) for (key, vals) in self.info_trace.items()]
+            print(tabulate(t))
+            self.info_trace.clear()
+            self.last_report += self.report_freq
+
+            fake_accs = [f"{acc:5.2f}" for acc in self.student_perf_trace]
+            real_accs = [f"{acc:5.2f}" for acc in self.student_real_perf_trace]
+            self.info(" | ".join(fake_accs), tags=["@FAKE"])
+            self.info(" | ".join(real_accs), tags=["@REAL"])
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
@@ -788,7 +828,8 @@ class GenerativeProfessor(Professor):
                 next_nll += F.cross_entropy(next_output, target[mask])
                 if do_contrast:
                     with torch.no_grad():
-                        contrast_output = student(data[mask], params=contrast_params)
+                        contrast_output = student(data[mask],
+                                                  params=contrast_params)
                         contrast_p = F.softmax(contrast_output, dim=1)
                     next_logp = F.log_softmax(next_output, dim=1)
                     contrast_nll += F.kl_div(next_logp, contrast_p)
@@ -976,6 +1017,16 @@ class GenerativeProfessor(Professor):
                 if np.random.sample() < p_reset:
                     to_reset.append(sidx)
 
+        if to_reset and student_reset != "everystep":
+            colored = []
+            for sidx, acc in enumerate(self.student_perf_trace):
+                if sidx in to_reset:
+                    clrs = ("white", "on_magenta")
+                else:
+                    clrs = ("magenta",)
+                colored.append(clr(f"{acc:5.2f}", *clrs))
+            self.info(" | ".join(colored), tags=["RESET"])
+
         for sidx in to_reset:
             if self.start_params:
                 self.students[sidx].load_state_dict(self.start_params)
@@ -988,9 +1039,6 @@ class GenerativeProfessor(Professor):
             self.student_optimizers[sidx] = get_optimizer(
                 self.students[sidx].parameters(),
                 self.args.student_optimizer)
-            self.student_perf_trace[sidx] = 1 / self.nclasses
+            self.student_perf_trace[sidx] = 100. / self.nclasses
+            self.student_real_perf_trace[sidx] = 100. / self.nclasses
 
-        if to_reset and student_reset != "everystep":
-            self.info("Students",
-                       ",".join([str(sidx) for sidx in to_reset]),
-                       "needed reset.")

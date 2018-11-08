@@ -9,13 +9,13 @@ in_size: [1, 32, 32]
 
 random_params: yes
 
-c_l2: .0001
-nepochs: 3
+c_l2: 0
+nepochs: 40
 
 evaluation:
-  freq: 30000
+  freq: 240000
   nstudents: 3
-  teaching_steps: 200
+  teaching_steps: 2000
   eval_freq: 25
 
 student:
@@ -32,9 +32,9 @@ student_optimizer:
 
 professor:
   name: GenerativeProfessor
-  nstudents: 10
+  nstudents: 24
   random_students: no
-  trained_on_fake: 5
+  trained_on_fake: 24
 
   nz: 32
   nperf: 16
@@ -57,25 +57,27 @@ professor:
     name: Adam
     lr: .001
 
-  c_nll: 1
+  c_nll: 0
   c_kl: 1
   c_contrast_kl: 0.5
   c_grad_mse: 0
   c_grad_cos: 0
-  c_next_nll: 0
-  c_contrast_next_nll: 0
+  c_next_nll: 1
+  c_contrast_next_nll: 0.5
   c_next_nll2: 0
   c_next_kl: 0
   c_hess: 0
-  c_d: 0.5
+  c_d: 0
   c_recon: 0
-  c_latent_kl: 0.1
+  c_latent_kl: 1
   next_lr: .001
   target_dropout: 0
 
   grad_type: example
-  grad_samples: 10
+  grad_samples: 128
 
   eval_samples: 128
 
   student_reset: linspace
+
+  report_freq: 12800

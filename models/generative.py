@@ -1,6 +1,9 @@
 from typing import Tuple
 from functools import reduce
 from operator import mul
+
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -110,9 +113,12 @@ class GenericGenerator(nn.Module):
         if self.perf_features is not None:
             if perf is None:
                 perf = 1 / self.nclasses
-            pf = self.perf_features.log_prob(perf).exp()\
-                     .unsqueeze(0).repeat(batch_size, 1).to(device)
-            all_latent = (cond, noise, pf)
+            elif torch.is_tensor(perf):
+                perf = perf.view(-1, 1)
+            pf = self.perf_features.log_prob(perf).exp()
+            if pf.ndimension() < 2:
+                pf = pf.unsqueeze(0).repeat(batch_size, 1)
+            all_latent = (cond, noise, pf.to(device))
         else:
             all_latent = (cond, noise)
 
