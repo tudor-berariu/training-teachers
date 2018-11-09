@@ -977,7 +977,7 @@ class GenerativeProfessor(Professor):
             if nreal > 0:
                 to_reset_1 = what_to_reset(ref_acc, nclasses,
                                            student_reset,
-                                           self.avg_fake_acc,
+                                           self.avg_real_acc,
                                            (0, nreal))
             if nfake > 0:
                 to_reset_2 = what_to_reset(ref_acc, nclasses,
