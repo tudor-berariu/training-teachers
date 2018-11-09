@@ -82,6 +82,7 @@ class GenerativeProfessor(Professor):
         self.nrmlz = args.nrmlz
         self.crt_device = device
         self.start_params = start_params
+        self.students_per_batch = args.students_per_batch
 
         self._init_students()
         self.nstudents = nstudents = len(self.students)
@@ -109,6 +110,8 @@ class GenerativeProfessor(Professor):
         self.coeffs.c_nll = args.c_nll
         self.coeffs.c_kl = args.c_kl
         self.coeffs.c_contrast_kl = args.c_contrast_kl
+        self.coeffs.c_adv = args.c_adv
+
         self.coeffs.c_grad_mse = args.c_grad_mse
         self.coeffs.c_grad_cos = args.c_grad_cos
         self.coeffs.c_next_nll = args.c_next_nll
@@ -364,8 +367,8 @@ class GenerativeProfessor(Professor):
 
         nstudents = len(self.students)  # type: int
 
-        for sidx, student in enumerate(self.students):
-
+        for sidx in torch.randperm(self.students_per_batch):
+            student = self.students[sidx]
             perf = self.avg_fake_acc[sidx]
 
             # -----------------------------------------------------------------
@@ -380,6 +383,10 @@ class GenerativeProfessor(Professor):
                 data = torch.cat((orig_data, prev_data.detach()), dim=0)
                 target = torch.cat((orig_target, prev_target.detach()), dim=0)
                 del prev_data, prev_target
+
+            if coeffs.c_adv > 0:
+                self.debug("Need gradients on real data")
+                data.requires_grad_(True)
 
             # -----------------------------------------------------------------
             #
@@ -543,6 +550,26 @@ class GenerativeProfessor(Professor):
 
             # -----------------------------------------------------------------
             #
+            #
+
+            if coeffs.c_adv > 0:
+                adv_loss = F.mse_loss(
+                    grad_of(fake_nlls, fake_data,
+                            grad_outputs=torch.ones(len(data),
+                                                    device=data.device))[0],
+                    grad_of(real_nlls, data,
+                            grad_outputs=torch.ones(len(data),
+                                                    device=data.device))[0],
+                    reduction="sum")
+                adv_loss *= coeffs.c_adv
+                professor_loss += adv_loss
+                info["Adversarial"] = info.get("Adversarial", 0) + adv_loss.item()
+
+                del adv_loss
+
+
+            # -----------------------------------------------------------------
+            #
             # Mean squared error between fake and real gradients.
 
             if coeffs.c_grad_mse > 0:
@@ -689,7 +716,7 @@ class GenerativeProfessor(Professor):
         self.reset_students(len(orig_data))
 
         for key, value in info.items():
-            self.info_trace.setdefault(key, []).append(value / nstudents)
+            self.info_trace.setdefault(key, []).append(value / self.students_per_batch)
 
         for key, value in info_max.items():
             [old_value] = self.info_trace.get(key, [value])
