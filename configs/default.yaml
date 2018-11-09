@@ -34,7 +34,7 @@ professor:
   name: GenerativeProfessor
   nstudents: 24
   random_students: no
-  trained_on_fake: 24
+  trained_on_fake: 18
 
   nz: 32
   nperf: 16
@@ -59,11 +59,11 @@ professor:
 
   c_nll: 0
   c_kl: 1
-  c_contrast_kl: 0.5
+  c_contrast_kl: 1
   c_grad_mse: 0
   c_grad_cos: 0
-  c_next_nll: 1
-  c_contrast_next_nll: 0.5
+  c_next_nll: 0
+  c_contrast_next_nll: 0
   c_next_nll2: 0
   c_next_kl: 0
   c_hess: 0
@@ -80,4 +80,4 @@ professor:
 
   student_reset: linspace
 
-  report_freq: 12800
+  report_freq: 2560

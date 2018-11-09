@@ -219,6 +219,7 @@ def run(args: Namespace):
 
         if should_stop:
             break
+        professor.end_epoch()
 
         professor.save_state(args.out_dir, epoch, **some_batch)
         with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:

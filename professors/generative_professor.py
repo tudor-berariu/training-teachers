@@ -177,13 +177,14 @@ class GenerativeProfessor(Professor):
 
         # ---------------------------------------------------------------------
 
-        self.student_perf_trace = [100.0 / nclasses] * len(self.students)
-        self.student_real_perf_trace = [100.0 / nclasses] * len(self.students)
+        self.avg_fake_acc = [100.0 / nclasses] * len(self.students)
+        self.avg_real_acc = [100.0 / nclasses] * len(self.students)
         self.max_known_real_acc = 150 /nclasses
         self.last_perf = None  # used during evaluation
 
         self.info_trace = OrderedDict({})
         self.nseen = 0
+        self.epoch = 1
         self.report_freq = args.report_freq
         self.last_report = 0
 
@@ -365,7 +366,7 @@ class GenerativeProfessor(Professor):
 
         for sidx, student in enumerate(self.students):
 
-            perf = self.student_perf_trace[sidx]
+            perf = self.avg_fake_acc[sidx]
 
             # -----------------------------------------------------------------
             #
@@ -680,10 +681,10 @@ class GenerativeProfessor(Professor):
             #
             # -- Post computation
 
-            self.student_perf_trace[sidx] *= .75
-            self.student_perf_trace[sidx] += .25 * fake_acc
-            self.student_real_perf_trace[sidx] *= .75
-            self.student_real_perf_trace[sidx] += .25 * real_acc
+            self.avg_fake_acc[sidx] *= .75
+            self.avg_fake_acc[sidx] += .25 * fake_acc
+            self.avg_real_acc[sidx] *= .75
+            self.avg_real_acc[sidx] += .25 * real_acc
 
         self.reset_students(len(orig_data))
 
@@ -701,14 +702,46 @@ class GenerativeProfessor(Professor):
     def report(self):
         if self.nseen - self.last_report >= self.report_freq:
             t = [(key, np.mean(vals)) for (key, vals) in self.info_trace.items()]
+            t = [("Epoch", self.epoch), ("Seen", self.nseen)] + t
             print(tabulate(t))
             self.info_trace.clear()
             self.last_report += self.report_freq
 
-            fake_accs = [f"{acc:5.2f}" for acc in self.student_perf_trace]
-            real_accs = [f"{acc:5.2f}" for acc in self.student_real_perf_trace]
-            self.info(" | ".join(fake_accs), tags=["@FAKE"])
-            self.info(" | ".join(real_accs), tags=["@REAL"])
+            avg_fake_acc, avg_real_acc = self.avg_fake_acc, self.avg_real_acc
+            fake_accs = [f"{acc:5.2f}" for acc in avg_fake_acc]
+            real_accs = [f"{acc:5.2f}" for acc in avg_real_acc]
+
+            nreal = self.nstudents - self.trained_on_fake
+            if nreal > 0:
+                max_r_on_f_idx = np.argmax(avg_fake_acc[:nreal])
+                max_r_on_f = avg_fake_acc[max_r_on_f_idx]
+                fake_accs[max_r_on_f_idx] = clr(f"{max_r_on_f:5.2f}",
+                                                "white", "on_cyan")
+
+                max_r_on_r_idx = np.argmax(avg_real_acc[:nreal])
+                max_r_on_r = avg_real_acc[max_r_on_r_idx]
+                real_accs[max_r_on_r_idx] = clr(f"{max_r_on_r:5.2f}",
+                                                "white", "on_cyan")
+
+            if self.trained_on_fake > 0:
+                max_f_on_f_idx = np.argmax(avg_fake_acc[nreal:])
+                max_f_on_f = avg_fake_acc[max_f_on_f_idx + nreal]
+                fake_accs[max_f_on_f_idx + nreal] = clr(f"{max_f_on_f:5.2f}",
+                                                "white", "on_green")
+
+                max_f_on_r_idx = np.argmax(avg_real_acc[nreal:])
+                max_f_on_r = avg_real_acc[max_f_on_r_idx + nreal]
+                real_accs[max_f_on_r_idx + nreal] = clr(f"{max_f_on_r:5.2f}",
+                                                "white", "on_green")
+
+            self.info(" | ".join(fake_accs[:nreal]),
+                      clr("|||", "yellow"),
+                      " | ".join(fake_accs[nreal:]),
+                      tags=["@FAKE"])
+            self.info(" | ".join(real_accs[:nreal]),
+                      clr("|||", "yellow"),
+                      " | ".join(real_accs[nreal:]),
+                      tags=["@REAL"])
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
@@ -943,12 +976,12 @@ class GenerativeProfessor(Professor):
             if nreal > 0:
                 to_reset_1 = what_to_reset(ref_acc, nclasses,
                                            student_reset,
-                                           self.student_perf_trace,
+                                           self.avg_fake_acc,
                                            (0, nreal))
             if nfake > 0:
                 to_reset_2 = what_to_reset(ref_acc, nclasses,
                                            student_reset,
-                                           self.student_perf_trace,
+                                           self.avg_fake_acc,
                                            (nreal,
                                             nstudents))
             to_reset = to_reset_1 + to_reset_2
@@ -960,15 +993,29 @@ class GenerativeProfessor(Professor):
                 if np.random.sample() < p_reset:
                     to_reset.append(sidx)
 
+        nreal = self.nstudents - self.trained_on_fake
+        max_f_on_f_idx, max_f_on_r_idx = None, None
+        if nreal > 0:
+            max_f_on_r_idx = np.argmax(self.avg_fake_acc[:nreal])
+        if self.trained_on_fake > 0:
+            max_f_on_f_idx = nreal + np.argmax(self.avg_fake_acc[nreal:])
+
         if to_reset and student_reset != "everystep":
             colored = []
-            for sidx, acc in enumerate(self.student_perf_trace):
+            for sidx, acc in enumerate(self.avg_fake_acc):
                 if sidx in to_reset:
                     clrs = ("white", "on_magenta")
+                elif sidx == max_f_on_r_idx:
+                    clrs = ("white", "on_cyan")
+                elif sidx == max_f_on_f_idx:
+                    clrs = ("white", "on_green")
                 else:
-                    clrs = ("magenta",)
+                    clrs = ("white",)
                 colored.append(clr(f"{acc:5.2f}", *clrs))
-            self.info(" | ".join(colored), tags=["RESET"])
+            self.info(" | ".join(colored[:nreal]),
+                      clr("|||", "yellow"),
+                      " | ".join(colored[nreal:]),
+                      tags=["RESET"])
 
         for sidx in to_reset:
             if self.start_params:
@@ -982,6 +1029,8 @@ class GenerativeProfessor(Professor):
             self.student_optimizers[sidx] = get_optimizer(
                 self.students[sidx].parameters(),
                 self.args.student_optimizer)
-            self.student_perf_trace[sidx] = 100. / self.nclasses
-            self.student_real_perf_trace[sidx] = 100. / self.nclasses
+            self.avg_fake_acc[sidx] = 100. / self.nclasses
+            self.avg_real_acc[sidx] = 100. / self.nclasses
 
+    def end_epoch(self):
+        self.epoch += 1

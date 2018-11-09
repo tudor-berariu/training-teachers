@@ -14,6 +14,9 @@ class Professor:
     def process(self, data, target) -> bool:
         raise NotImplementedError
 
+    def end_epoch(self):
+        pass
+
     def eval_student(self, student, step):
         raise NotImplementedError
 
