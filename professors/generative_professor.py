@@ -709,7 +709,7 @@ class GenerativeProfessor(Professor):
 
             avg_fake_acc, avg_real_acc = self.avg_fake_acc, self.avg_real_acc
             fake_accs = [f"{acc:5.2f}" for acc in avg_fake_acc]
-            real_accs = [f"{acc:5.2f}" for acc in avg_real_acc]
+            real_accs = [clr(f"{acc:5.2f}", "yellow") for acc in avg_real_acc]
 
             nreal = self.nstudents - self.trained_on_fake
             if nreal > 0:
@@ -721,7 +721,7 @@ class GenerativeProfessor(Professor):
                 max_r_on_r_idx = np.argmax(avg_real_acc[:nreal])
                 max_r_on_r = avg_real_acc[max_r_on_r_idx]
                 real_accs[max_r_on_r_idx] = clr(f"{max_r_on_r:5.2f}",
-                                                "white", "on_cyan")
+                                                "yellow", "on_cyan")
 
             if self.trained_on_fake > 0:
                 max_f_on_f_idx = np.argmax(avg_fake_acc[nreal:])
@@ -732,7 +732,7 @@ class GenerativeProfessor(Professor):
                 max_f_on_r_idx = np.argmax(avg_real_acc[nreal:])
                 max_f_on_r = avg_real_acc[max_f_on_r_idx + nreal]
                 real_accs[max_f_on_r_idx + nreal] = clr(f"{max_f_on_r:5.2f}",
-                                                "white", "on_green")
+                                                "yellow", "on_green")
 
             self.info(" | ".join(fake_accs[:nreal]),
                       clr("|||", "yellow"),
@@ -742,6 +742,7 @@ class GenerativeProfessor(Professor):
                       clr("|||", "yellow"),
                       " | ".join(real_accs[nreal:]),
                       tags=["@REAL"])
+            self.info("----")
 
     def _next_kldiv(self, student, real_output, data, aligned_grads):
         next_kldiv = 0
@@ -1031,6 +1032,7 @@ class GenerativeProfessor(Professor):
                 self.args.student_optimizer)
             self.avg_fake_acc[sidx] = 100. / self.nclasses
             self.avg_real_acc[sidx] = 100. / self.nclasses
+
 
     def end_epoch(self):
         self.epoch += 1
