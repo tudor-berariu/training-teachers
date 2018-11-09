@@ -136,7 +136,8 @@ class GenerativeProfessor(Professor):
 
         w_contrast = ["c_contrast_kl", "c_contrast_next_nll"]
         self.need_contrast = check_need(w_contrast)
-        self.info("Contrast data will be generated.")
+        if self.need_contrast:
+            self.info("Contrast data will be generated.")
 
         w_real_grad = ["c_grad_mse", "c_grad_cos", "c_next_nll2", "c_hess"]
         self.need_real_grad = check_need(w_real_grad)
@@ -367,7 +368,7 @@ class GenerativeProfessor(Professor):
 
         nstudents = len(self.students)  # type: int
 
-        for sidx in torch.randperm(self.students_per_batch):
+        for sidx in torch.randperm(nstudents)[:self.students_per_batch]:
             student = self.students[sidx]
             perf = self.avg_fake_acc[sidx]
 
