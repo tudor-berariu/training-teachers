@@ -1,7 +1,14 @@
+from argparse import Namespace
 import torch
 import torch.nn.functional as F
 
 from utils import printer
+
+
+class PostTrainProfessor:
+
+    def eval_student(self, student, step):
+        raise NotImplementedError
 
 
 class Professor:
@@ -21,6 +28,9 @@ class Professor:
         raise NotImplementedError
 
     def save_state(self, out_dir, epoch, data, target):
+        raise NotImplementedError
+
+    def post_train_professor(self) -> PostTrainProfessor:
         raise NotImplementedError
 
 
@@ -48,3 +58,10 @@ class DummyProfessor(Professor):
 
     def save_state(self, out_dir, epoch, data, target):
         pass
+
+    def post_train_professor(self, old_model=None):
+        if old_model is not None:
+            return old_model
+        return DummyProfessor(Namespace(nclasses=self.nclasses,
+                                        in_size = self.in_size),
+                              device=self.device)

@@ -10,13 +10,15 @@ in_size: [1, 32, 32]
 random_params: yes
 
 c_l2: 0
-nepochs: 40
+nepochs: 2
 
 evaluation:
-  freq: 240000
+  freq: 24000
   nstudents: 3
-  teaching_steps: 2000
+  teaching_steps: 200
   eval_freq: 25
+  async: yes
+  continuous: no
 
 student:
   name: ConvNet
@@ -32,11 +34,11 @@ student_optimizer:
 
 professor:
   name: GenerativeProfessor
-  nstudents: 24
+  nstudents: 9
   random_students: no
-  trained_on_fake: 18
+  trained_on_fake: 0
 
-  students_per_batch: 12
+  students_per_batch: 2
 
 
   nz: 32
@@ -64,6 +66,7 @@ professor:
   c_kl: 0
   c_contrast_kl: 0
   c_adv: 1
+  c_inv_nll: 0
   c_grad_mse: 0
   c_grad_cos: 0
   c_next_nll: 0

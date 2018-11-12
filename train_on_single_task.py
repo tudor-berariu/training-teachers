@@ -2,6 +2,7 @@ import os
 import pickle
 from copy import deepcopy
 from argparse import Namespace
+import concurrent.futures
 
 from termcolor import colored as clr
 import numpy as np
@@ -76,6 +77,7 @@ def test_professor(agent, loader, device, args, state_dict=None,
             student.load_state_dict(state_dict)
         student_optimizer = get_optimizer(student.parameters(),
                                           args.student_optimizer)
+        crt_accs = []
         for step in range(nsteps):
             student_optimizer.zero_grad()
             synthetic_loss, synthetic_acc = agent.eval_student(student, step)
@@ -90,7 +92,7 @@ def test_professor(agent, loader, device, args, state_dict=None,
             if (step + 1) % args.evaluation.eval_freq == 0:
                 acc, loss, conf = test(student, loader, device, verbose=False)
                 student.train()
-                all_accs.append(acc)
+                crt_accs.append(acc)
                 info("Syn. NLL:", f"{synthetic_loss.item():.3f};",
                      "Syn. Acc:", f"{synthetic_acc:.2f}%;",
                      "" if l2_loss is None else f"L2: {l2_loss.item():.3f};",
@@ -99,8 +101,9 @@ def test_professor(agent, loader, device, args, state_dict=None,
                      tags=[f"Student {sidx:d}/{nstudents:d}",
                            f"{step + 1: 4d}/{nsteps:d}"])
         print_conf(conf, print_func=info)
-    if len(all_accs) > 25:
-        all_accs = all_accs[-25:]  # Keep the last scores only
+        if len(all_accs) > 25:
+            crt_accs = crt_accs[-25:]  # Keep the last scores only
+        all_accs.append(np.mean(crt_accs))
     final_score = np.mean(all_accs)
     info(clr(f" >>> Final score = {final_score:.3f} <<<", "yellow"))
     return final_score
@@ -189,6 +192,14 @@ def run(args: Namespace):
     best_fitness, best_idx, scores, scores_at = None, None, [], []
     found_nan, should_stop = False, False
 
+    eval_professor = None
+    async_result = None
+
+    if args.evaluation.continuous and not args.evaluation.async:
+        raise ValueError("Continuous eval is available in async mode only.")
+    if args.evaluation.async:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
     for epoch in range(1, args.nepochs + 1):
         for _batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
@@ -200,22 +211,62 @@ def run(args: Namespace):
                 found_nan = should_stop = True
                 break
 
-            if seen_examples - last_professor_eval >= args.evaluation.freq:
-                score = test_professor(professor, test_loader, device, args,
-                                       state_dict=deepcopy(start_params))
-                scores.append(score)
-                scores_at.append(seen_examples)
-                if len(scores) >= 10:
-                    new_avg = np.mean(scores[-10:])
-                    if best_fitness is None or new_avg > best_fitness:
-                        best_fitness, best_idx = new_avg, len(scores)
+            new_score = False
 
-                    if best_idx + 10 <= len(scores):
-                        info("Early stopping: 10 evaluations, no improvement")
-                        should_stop = True
-                        break
+            if async_result is not None:
+                seen_at, result = async_result
+                if result.done():
+                    score = result.result()
+                    scores.append(score)
+                    scores_at.append(seen_at)
+                    async_result = None
+                    new_score = True
+                    info("Ended evaluation at", seen_at, "steps with",
+                         clr(f"{score:.3f}%", "white", "on_magenta"),
+                         tags=["TEACH"])
 
+            if async_result is not None:
+                pass
+            elif args.evaluation.continuous:
+                info("Started evaluation at", seen_examples, "steps",
+                     tags=["TEACH"])
+                eval_professor = professor.post_train_professor(
+                    old_model=eval_professor)
+                result = executor.submit(test_professor,
+                                         eval_professor, test_loader, device, args,
+                                         state_dict=start_params,
+                                         verbose=0)
+                async_result = (seen_examples, result)
+            elif seen_examples - last_professor_eval >= args.evaluation.freq:
+                info("Started evaluation at", seen_examples, "steps",
+                     tags=["TEACH"])
+                if args.evaluation.async:
+                    eval_professor = professor.post_train_professor()
+                    result = executor.submit(test_professor,
+                                             eval_professor, test_loader,
+                                             device, args,
+                                             state_dict=start_params,
+                                             verbose=0)
+                    async_result = (seen_examples, result)
+                else:
+                    score = test_professor(eval_professor, test_loader, device,
+                                           args, state_dict=start_params)
+                    scores.append(score)
+                    scores_at.append(seen_examples)
+                    info("Evaluation at", seen_examples, "steps ended with",
+                         clr(f"{score:.3f}%", "white", "on_magenta"),
+                         tags=["TEACH"])
                 last_professor_eval += args.evaluation.freq
+
+            if new_score and len(scores) >= 10:
+                new_avg = np.mean(scores[-10:])
+                if best_fitness is None or new_avg > best_fitness:
+                    best_fitness, best_idx = new_avg, len(scores)
+
+                if best_idx + 10 <= len(scores):
+                    info("Early stopping: 10 evaluations, no improvement")
+                    should_stop = True
+                    break
 
         if should_stop:
             break
@@ -227,6 +278,24 @@ def run(args: Namespace):
                         handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         info(f"Ended epoch {epoch:2d} / {args.nepochs:d}.")
+
+    if args.evaluation.async:
+        executor.shutdown()  # It waits for any async evaluation to end
+        if async_result is not None:
+            seen_at, result = async_result
+            score = result.result()
+            scores.append(score)
+            scores_at.append(seen_at)
+            if len(scores) >= 10:
+                new_avg = np.mean(scores[-10:])
+                if best_fitness is None or new_avg > best_fitness:
+                    best_fitness = new_avg
+            info("Evaluation at", seen_at, "steps",
+                 clr(f"{score:.3f}%", "white", "on_magenta"),
+                 tags=["TEACH"])
+            with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
+                pickle.dump({"scores": scores, "seen": scores_at},
+                            handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     if found_nan:
         fitness = -1.0

@@ -1,6 +1,7 @@
 from itertools import chain
 from collections import OrderedDict
 import os.path
+from typing import Tuple
 from argparse import Namespace
 from tabulate import tabulate
 from termcolor import colored as clr
@@ -16,7 +17,7 @@ from models import Student
 from models import get_model
 from models import generative, classifiers
 from models.classifiers import sample_classifier
-from professors.professor import Professor
+from professors.professor import Professor, PostTrainProfessor
 
 from utils import get_optimizer, nparams, grad_info
 from loss_utils import cos, mse, l2
@@ -259,7 +260,7 @@ class GenerativeProfessor(Professor):
 
     def eval_student(self, student: Student,
                      step: int,
-                     nsamples: int = None) -> Tensor:
+                     nsamples: int = None) -> Tuple[Tensor, float]:
         if step == 0:
             self.last_perf = last_perf = 1 / self.nclasses
         else:
@@ -1061,6 +1062,56 @@ class GenerativeProfessor(Professor):
             self.avg_fake_acc[sidx] = 100. / self.nclasses
             self.avg_real_acc[sidx] = 100. / self.nclasses
 
-
     def end_epoch(self):
         self.epoch += 1
+
+    def post_train_professor(self, old_model=None):
+        args = self.args
+        in_size = self.in_size  # type: Tuple[int]
+        nclasses = self.nclasses
+        eval_samples = self.eval_samples
+        if old_model is None:
+            new_generator = get_model(generative,
+                                      args.generator,
+                                      in_size=in_size,
+                                      nclasses=nclasses,
+                                      nz=args.nz,
+                                      nperf=args.nperf)
+            new_generator.to(self.crt_device)
+            new_generator.load_state_dict(self.generator.state_dict())
+            return PostTrainGenerativeProfessor(new_generator, nclasses,
+                                                eval_samples)
+        assert isinstance(old_model, PostTrainGenerativeProfessor)
+        old_model.generator.load_state_dict(self.generator.state_dict())
+        old_model.last_perf = 100 / nclasses
+        return old_model
+
+
+class PostTrainGenerativeProfessor(PostTrainProfessor):
+
+    def __init__(self, generator, nclasses, eval_samples):
+        self.generator = generator
+        self.generator.eval()
+        self.nclasses = nclasses
+        self.eval_samples = eval_samples
+        self.last_perf = 100 / nclasses
+
+    def eval_student(self, student: Student,
+                     step: int,
+                     nsamples: int = None) -> Tensor:
+        if step == 0:
+            self.last_perf = last_perf = 1 / self.nclasses
+        else:
+            last_perf = self.last_perf
+        if nsamples is None:
+            nsamples = self.eval_samples
+        with torch.no_grad():
+            data, target = self.generator(nsamples=nsamples, perf=last_perf)
+
+        output = student(data)
+
+        with torch.no_grad():
+            pred = output.max(1, keepdim=True)[1]
+            correct = pred.eq(target.view_as(pred)).sum().item()
+        self.last_perf = last_perf = (correct / len(data) * 100)
+        return F.cross_entropy(output, target), last_perf
