@@ -90,6 +90,7 @@ class GenerativeProfessor(Professor):
         self.generator_idx = 0
 
         self.generator, self.encoder, self.discriminator = None, None, None
+        self.siamese = None
         self.d_optimizer, self.prof_optimizer = None, None
         self.old_generator = None
 
@@ -103,6 +104,9 @@ class GenerativeProfessor(Professor):
 
         self.label_to_discriminator = args.label_to_discriminator
         self.permute_before_discriminator = args.permute_before_discriminator
+        self.contrast_from_real_data = args.contrast_from_real_data
+        self.siamese_detach_other = args.siamese_detach_other
+        self.margin = args.siamese_margin
 
         self._create_components()
 
@@ -112,6 +116,7 @@ class GenerativeProfessor(Professor):
         self.coeffs.c_kl = args.c_kl
         self.coeffs.c_contrast_kl = args.c_contrast_kl
         self.coeffs.c_adv = args.c_adv
+        self.coeffs.c_siamese = args.c_siamese
 
         self.coeffs.c_grad_mse = args.c_grad_mse
         self.coeffs.c_grad_cos = args.c_grad_cos
@@ -130,12 +135,12 @@ class GenerativeProfessor(Professor):
         # ---------------------------------------------------------------------
         #
         # Let's check what needs to be computed (i.e. contrast data,
-        # gradinets)
+        # gradients)
 
         def check_need(lst):
             return any(getattr(coeffs, n) > 0 for n in lst)
 
-        w_contrast = ["c_contrast_kl", "c_contrast_next_nll"]
+        w_contrast = ["c_contrast_kl", "c_contrast_next_nll", "c_siamese"]
         self.need_contrast = check_need(w_contrast)
         if self.need_contrast:
             self.info("Contrast data will be generated.")
@@ -223,16 +228,25 @@ class GenerativeProfessor(Professor):
         self.info(nparams(self.generator,
                           name=f"Generator:{self.generator_idx:d}"))
 
+        all_param_sets = [self.generator.parameters()]
+
         if hasattr(args, "encoder") and args.c_latent_kl > 0:
             self.encoder = get_model(generative, args.encoder,
                                      in_size=args.in_size, nz=args.nz)
             self.encoder.to(self.crt_device)
-            all_params = chain(self.encoder.parameters(),
-                               self.generator.parameters())
             self.info(nparams(self.encoder, name=f"Encoder"))
-        else:
-            all_params = self.generator.parameters()
+            all_param_sets.append(self.encoder.parameters())
 
+        if hasattr(args, "siamese") and args.c_siamese > 0:
+            self.siamese = get_model(classifiers,
+                                     args.siamese,
+                                     in_size=args.in_size,
+                                     nclasses=32)
+            self.siamese.to(self.crt_device)
+            self.info(nparams(self.siamese, name="Siamese"))
+            all_param_sets.append(self.siamese.parameters())
+
+        all_params = chain(*all_param_sets)
         self.prof_optimizer = get_optimizer(all_params, args.optimizer)
 
         if hasattr(args, "discriminator") and args.c_d > 0:
@@ -357,6 +371,7 @@ class GenerativeProfessor(Professor):
         coeffs = self.coeffs
         encoder = self.encoder
         generator = self.generator
+        siamese = self.siamese
 
         orig_data, orig_target = data, target
         # ---------------------------------------------------------------------
@@ -401,21 +416,39 @@ class GenerativeProfessor(Professor):
             else:
                 tmask = None
 
+            fake_kwargs = {"tmask": tmask, "perf": perf}
+
             if encoder is not None:
                 mean, log_var = encoder(data)
-                fake_data, _target = generator(target, mean=mean,
-                                               log_var=log_var,
-                                               tmask=tmask,
-                                               perf=perf)
-            else:
-                fake_data, _target = generator(target, tmask=tmask, perf=perf)
+                fake_kwargs["mean"] = mean
+                fake_kwargs["log_var"] = log_var
+
+            fake_data, _target = generator(target, **fake_kwargs)
 
             if self.need_contrast:
-                with torch.no_grad():
-                    contrast_data, _target = generator(target, tmask=tmask,
-                                                       perf=perf)
+                contrast_kwargs = {"tmask": tmask, "perf": perf}
+                if self.contrast_from_real_data and encoder is not None:
+                    pointers = torch.zeros_like(target)
+                    for i in range(self.nclasses):
+                        idxs = (target == i).nonzero()
+                        if idxs.nelement() > 0:
+                            pointers[idxs[:-1]] = idxs[1:]
+                            pointers[idxs[-1]] = idxs[0]
+                    contrast_mean = mean.index_select(0, pointers)
+                    contrast_log_var = log_var.index_select(0, pointers)
+                    contrast_kwargs["mean"] = contrast_mean
+                    contrast_kwargs["log_var"] = contrast_log_var
+
+                if coeffs.c_siamese == 0 or self.siamese_detach_other:
+                    with torch.no_grad():
+                        contrast_data, _ = generator(target, **contrast_kwargs)
+                else:
+                    contrast_data, _ = generator(target, **contrast_kwargs)
             else:
                 contrast_data = None
+
+            if coeffs.c_siamese > 0:
+                similar_data, _target = generator(target, **fake_kwargs)
 
             # -----------------------------------------------------------------
             #
@@ -515,6 +548,33 @@ class GenerativeProfessor(Professor):
             # professor_loss.
 
             professor_loss = 0
+
+            # -----------------------------------------------------------------
+            #
+            # Siamese network :)
+
+            if self.siamese and coeffs.c_siamese > 0:
+                v_fake = siamese(fake_data)
+                if self.siamese_detach_other:
+                    v_similar = siamese(similar_data.detach())
+                    v_contrast = siamese(contrast_data.detach())
+                else:
+                    v_similar = siamese(similar_data.detach())
+                    v_contrast = siamese(contrast_data.detach())
+
+                similar_dist = (v_fake - v_similar).pow(2).sum(dim=1)
+                sq_dist = (v_fake - v_contrast).pow(2).sum(dim=1).sqrt()
+                contrast_dist = torch.clamp(self.margin - sq_dist, min=0).pow(2)
+                similar_loss = similar_dist.mean()
+                contrast_loss = contrast_dist.mean()
+                siamese_loss = similar_loss + contrast_loss
+                siamese_loss *= coeffs.c_siamese
+                professor_loss += siamese_loss
+                info["Siamese"] = info.get("Siamese", 0) + siamese_loss.item()
+                info["Siamese - similar"] = similar_loss.item()
+                info["Siamese - contrast"] = contrast_loss.item()
+                del v_similar, v_contrast, v_fake, similar_dist, contrast_dist
+                del similar_loss, contrast_loss, siamese_loss
 
             # -----------------------------------------------------------------
             #
