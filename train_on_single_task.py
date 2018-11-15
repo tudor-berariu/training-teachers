@@ -269,8 +269,8 @@ def run(args: Namespace):
                 if best_fitness is None or new_avg > best_fitness:
                     best_fitness, best_idx = new_avg, len(scores)
 
-                if best_idx + 10 <= len(scores):
-                    info("Early stopping: 10 evaluations, no improvement")
+                if best_idx + 100 <= len(scores):
+                    info("Early stopping: 100 evaluations, no improvement")
                     should_stop = True
                     break
 
