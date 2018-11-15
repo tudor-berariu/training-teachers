@@ -313,7 +313,8 @@ class GenerativeProfessor(Professor):
                     None if siamese is None else siamese.state_dict()),
                    os.path.join(out_path, f"params_{epoch_no:04d}.th"))
 
-        torch.save(self.global_trace, f"training_trace_{epoch_no:04d}.th")
+        torch.save(self.global_trace,
+                   os.path.join(out_path, f"training_trace_{epoch_no:04d}.th"))
 
         # 2. generate_some_images
         with torch.no_grad():
