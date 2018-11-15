@@ -8,6 +8,24 @@ import torch.optim as optim
 import torch.nn as nn
 
 
+def args_to_dict(args: Namespace) -> dict:
+    queue = [(args, None)]
+    result = {}
+    while queue:
+        (data, prev) = queue.pop(0)
+        if isinstance(data, Namespace):
+            for key, value in data.__dict__.items():
+                new_name = key if prev is None else (prev + ":" + key)
+                queue.append((value, new_name))
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                new_name = key if prev is None else (prev + ":" + key)
+                queue.append((value, new_name))
+        else:
+            result[prev] = data
+    return result
+
+
 def printer(name: str, level: int, verbose: int = 1):
     def my_print(*args, tags: List[str] = None, **kwargs):
         if verbose >= level:

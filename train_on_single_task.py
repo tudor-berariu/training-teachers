@@ -10,14 +10,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from utils import printer
+from utils import printer, args_to_dict
 from utils import get_optimizer, print_conf
 from loss_utils import l2
 import professors
 from models import get_model
 from models import classifiers
 from tasks.datasets import get_loaders
-
 
 # -----------------------------------------------------------------------------
 #
@@ -115,6 +114,11 @@ def test_professor(agent, loader, device, args, state_dict=None,
 
 def run(args: Namespace):
 
+    if args.wandb:
+        import wandb
+        wandb.init()
+        wandb.config.update(args_to_dict(args))
+
     verbose = int(args.verbose) if hasattr(args, "verbose") else 1
     info = printer("MAIN", 1, verbose=verbose)
 
@@ -175,7 +179,7 @@ def run(args: Namespace):
     prof_args.in_size = in_size
     prof_args.nclasses = nclasses
     prof_args.nrmlz = nrmlz
-
+    prof_args.wandb = args.wandb
     prof_args.student = args.student
     prof_args.student_optimizer = args.student_optimizer
 
@@ -219,6 +223,7 @@ def run(args: Namespace):
                     score = result.result()
                     scores.append(score)
                     scores_at.append(seen_at)
+                    wandb.log({"Step": seen_at, "score": score})
                     async_result = None
                     new_score = True
                     info("Ended evaluation at", seen_at, "steps with",
@@ -253,6 +258,7 @@ def run(args: Namespace):
                                            args, state_dict=start_params)
                     scores.append(score)
                     scores_at.append(seen_examples)
+                    wandb.log({"Step": seen_at, "score": score})
                     info("Evaluation at", seen_examples, "steps ended with",
                          clr(f"{score:.3f}%", "white", "on_magenta"),
                          tags=["TEACH"])
@@ -286,6 +292,7 @@ def run(args: Namespace):
             score = result.result()
             scores.append(score)
             scores_at.append(seen_at)
+            wandb.log({"step": seen_at, "score": score})
             if len(scores) >= 10:
                 new_avg = np.mean(scores[-10:])
                 if best_fitness is None or new_avg > best_fitness:
@@ -308,6 +315,9 @@ def run(args: Namespace):
 
     with open(os.path.join(args.out_dir, "fitness"), "w") as handler:
         handler.write(f"{fitness:f}\n")
+
+    if args.wandb:
+        wandb.run.summary["fitness"] = fitness
 
     return fitness
 
