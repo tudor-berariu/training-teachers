@@ -76,7 +76,7 @@ def run(args: Namespace) -> float:
         accs.append(acc)
         wandb.log({"acc": acc})
 
-    fitness = np.mean(accs[-5:])
+    fitness = np.mean(accs[:5])
 
     info(f"Final fitness: {fitness:.3f}")
 
@@ -84,7 +84,8 @@ def run(args: Namespace) -> float:
         handler.write(f"{fitness:f}\n")
 
     if args.wandb:
-        wandb.run.summary["last_five"] = fitness
+        wandb.run.summary["first_five"] = np.mean(accs[:5])
+        wandb.run.summary["last_five"] = np.mean(accs[5:])
         wandb.run.summary["avg_acc"] = np.mean(accs)
 
     return fitness
