@@ -1,5 +1,5 @@
 from math import ceil
-from typing import Iterator, Tuple
+from typing import Dict, Iterator, Tuple
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -65,7 +65,7 @@ class InMemoryDataLoader(Iterator):
     def __len__(self) -> int:
         return int(ceil(self.length / self.batch_size))
 
-    def sample(self, nsamples: int) -> Tensor:
+    def sample(self, nsamples: int) -> Dict[str, Tensor]:
         if nsamples > self.length:
             raise ValueError("You ask for too much.")
         idxs = torch.randint(self.length, (nsamples,),
@@ -78,40 +78,42 @@ def get_padding(in_size: Size, out_size: Size) -> Padding:
     d_h, d_w = out_size[-2] - in_size[-2], out_size[-1] - in_size[-1]
     p_h1, p_w1 = d_h // 2, d_w // 2
     p_h2, p_w2 = d_h - p_h1, d_w - p_w1
-    return (p_h1, p_h2, p_w1, p_w2)
+    return p_h1, p_h2, p_w1, p_w2
 
 
 def get_loaders(dataset: str,
                 batch_size: int,
                 test_batch_size: int,
-                in_size: Size = None):
+                in_size: Size = None,
+                normalize: bool = False):
     if in_size is None:
         in_size = (1, 32, 32)
     padding = get_padding(ORIGINAL_SIZE[dataset], in_size)
-    mean, std, = MEAN_STD[dataset][in_size]
+
+    transfs = [
+        transforms.Pad(padding),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda t: t.expand(in_size))
+    ]
+
+    if normalize:
+        mean, std = nrmlz = MEAN_STD[dataset][in_size]
+        transfs.append(transforms.Normalize((mean,), (std,)))
+    else:
+        nrmlz = None
 
     trainset = getattr(datasets, dataset)(
         f'./.data/{dataset:s}',
         train=True, download=True,
-        transform=transforms.Compose([
-            transforms.Pad(padding),
-            transforms.ToTensor(),
-            transforms.Lambda(lambda t: t.expand(in_size)),
-            transforms.Normalize((mean,), (std,))
-        ]))
+        transform=transforms.Compose(transfs))
     train_loader = DataLoader(trainset, batch_size=len(trainset))
     testset = getattr(datasets, dataset)(
         f'./.data/{dataset:s}',
         train=False,
-        transform=transforms.Compose([
-            transforms.Pad(padding),
-            transforms.ToTensor(),
-            transforms.Lambda(lambda t: t.expand(in_size)),
-            transforms.Normalize((mean,), (std,))
-        ]))
+        transform=transforms.Compose(transfs))
     test_loader = DataLoader(testset, batch_size=len(testset), shuffle=False)
 
     train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True)
     test_loader = InMemoryDataLoader(test_loader, test_batch_size)
 
-    return train_loader, test_loader, (in_size, NCLASSES[dataset], (mean, std))
+    return train_loader, test_loader, (in_size, NCLASSES[dataset], nrmlz)

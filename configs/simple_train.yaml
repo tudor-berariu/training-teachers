@@ -1,0 +1,24 @@
+wandb: yes
+no_cuda: no
+run_id: 1
+verbose: 1
+script: simple_train.py
+
+dataset: FashionMNIST
+batch_size: 128
+test_batch_size: 10000
+in_size: [1, 32, 32]
+
+nepochs: 25
+
+student:
+  name: ConvNet
+  channels: [32, 32]
+  units: [200]
+  use_bias: no
+  use_dropout: yes
+  use_batch_norm: no
+
+student_optimizer:
+  name: Adam
+  lr: 0.001

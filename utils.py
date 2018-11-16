@@ -8,18 +8,18 @@ import torch.optim as optim
 import torch.nn as nn
 
 
-def args_to_dict(args: Namespace) -> dict:
+def args_to_dict(args: Namespace, sep: str = ":") -> dict:
     queue = [(args, None)]
     result = {}
     while queue:
         (data, prev) = queue.pop(0)
         if isinstance(data, Namespace):
             for key, value in data.__dict__.items():
-                new_name = key if prev is None else (prev + ":" + key)
+                new_name = key if prev is None else (prev + sep + key)
                 queue.append((value, new_name))
         elif isinstance(data, dict):
             for key, value in data.items():
-                new_name = key if prev is None else (prev + ":" + key)
+                new_name = key if prev is None else (prev + sep + key)
                 queue.append((value, new_name))
         else:
             result[prev] = data
