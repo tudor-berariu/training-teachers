@@ -74,7 +74,8 @@ def run(args: Namespace) -> float:
             student_optimizer.step()
         acc, _, _ = test(student, test_loader, device)
         accs.append(acc)
-        wandb.log({"acc": acc})
+        if args.wandb:
+            wandb.log({"acc": acc})
 
     fitness = np.mean(accs[:5])
 
