@@ -12,13 +12,13 @@ in_size: [1, 32, 32]
 random_params: yes
 
 c_l2: 0
-nepochs: 100
+nepochs: 1000
 
 evaluation:
-  freq: 5
-  nstudents: 5
-  teaching_steps: 400
-  eval_freq: 10
+  freq: 4000
+  nstudents: 3
+  teaching_steps: 501
+  eval_freq: 20
   async: no
   continuous: no
 
@@ -100,6 +100,6 @@ professor:
 
   eval_samples: 128
 
-  student_reset: linspace
+  student_reset: everystep
 
-  report_freq: 1
+  report_freq: 1200

@@ -216,7 +216,7 @@ def run(args: Namespace):
                 break
 
             new_score = False
-
+            eval_professor = professor.post_train_professor()
             if async_result is not None:
                 seen_at, result = async_result
                 if result.done():
