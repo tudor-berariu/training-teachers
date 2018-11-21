@@ -35,8 +35,9 @@ def test(model, loader, device, verbose: int = 1):
 
     model.eval()
     with torch.no_grad():
-        for data, target in loader:
-            data, target = data.to(device), target.to(device)
+        for data, target, data_idx in loader:
+            data, target, data_idx = data.to(device), target.to(device), \
+                                        data_idx.to(device)
             output = model(data)
             loss += F.cross_entropy(output, target, reduction="sum").item()
             _, prediction = output.max(1)
@@ -185,7 +186,11 @@ def run(args: Namespace):
 
     # TODO: Other professors
     Professor = getattr(professors, prof_args.name)
-    professor = Professor(prof_args, device, start_params=start_params)
+    if args.professor.generator.name == 'MemGenerator':
+        professor = Professor(prof_args, device, start_params=start_params,
+                                ds_size = train_loader.ds_size)
+    else:
+        professor = Professor(prof_args, device, start_params=start_params)
 
     # -------------------------------------------------------------------------
     #
@@ -205,9 +210,10 @@ def run(args: Namespace):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     for epoch in range(1, args.nepochs + 1):
-        for _batch_idx, (data, target) in enumerate(train_loader):
-            data, target = data.to(device), target.to(device)
-            found_nan = professor.process(data, target)
+        for _batch_idx, (data, target, data_idx) in enumerate(train_loader):
+            data, target, data_idx = data.to(device), target.to(device),\
+                                        data_idx.to(device)
+            found_nan = professor.process(data, target, data_idx)
             seen_examples += len(data)
 
             if found_nan is None:

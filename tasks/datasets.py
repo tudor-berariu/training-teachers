@@ -59,9 +59,14 @@ class InMemoryDataLoader(Iterator):
 
     if self.shuffle:
       idxs = self.idxs[start:end]
-      return self.data[idxs], self.target[idxs]
+      return self.data[idxs], self.target[idxs], idxs
 
-    return self.data[start:end], self.target[start:end]
+    return self.data[start:end], self.target[start:end], \
+            torch.arange(start,end,dtype=torch.long)
+
+  @property
+  def ds_size(self):
+    return len(self.data)
 
   def __len__(self) -> int:
     return int(ceil(self.length / self.batch_size))
