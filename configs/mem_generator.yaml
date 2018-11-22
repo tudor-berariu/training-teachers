@@ -55,7 +55,7 @@ professor:
   
   siamese_detach_other: yes
   contrast_from_real_data: yes
-  ctrl_loss: yes
+  ctrl_loss: no
   siamese_margin: 1.0
 
   optimizer:
@@ -85,6 +85,6 @@ professor:
 
   eval_samples: 128
 
-  student_reset: everystep
+  student_reset: linspace
 
-  report_freq: 40
+  report_freq: 400
