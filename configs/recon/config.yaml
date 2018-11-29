@@ -1,0 +1,5 @@
+activation: ['relu','tanh']
+reset_freq: [1,100,2000]
+out_size: [10,50]
+n_proj: [10,50]
+objective: ['mse','kl']

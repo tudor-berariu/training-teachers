@@ -1,0 +1,10 @@
+ds_size: 100
+in_size: 1000
+out_size: 50
+n_proj: 50
+epochs: 2000
+layers: [500, 250]
+activation: 'relu'
+verbose: 0
+reset_freq: 1
+objective: 'mse'
