@@ -1,5 +1,4 @@
-activation: ['relu','tanh']
-reset_freq: [1,100,2000]
+reset_freq: [1,100]
 out_size: [10,50]
 n_proj: [10,50]
-objective: ['mse','kl']
+batch_size: [1,5,50]

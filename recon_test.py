@@ -5,11 +5,21 @@ import os
 from types import SimpleNamespace
 from liftoff.config import read_config
 import pickle
+from keras.datasets import fashion_mnist
 
-def kl(f, g):
+def kl(f, g, axis=-1):
     f_ = tf.nn.softmax(f)
     g_ = tf.nn.softmax(g)
-    return tf.reduce_sum(f_*(tf.log(f_)-tf.log(g_)),axis=1)
+    return tf.reduce_sum(f_*(tf.log(f_)-tf.log(g_)),axis=axis)
+    # return tf.contrib.kl_distance(f_,g_)
+
+
+def get_dataset(ds):
+  if ds=='random':
+    pass
+  else:
+    (train_images, train_labels), (test_images, test_labels) = \
+      fashion_mnist.load_data()
 
 class Proj(object):
 
@@ -47,14 +57,12 @@ def run(args):
   config = tf.ConfigProto()
   config.gpu_options.allow_growth = True
   s = tf.Session(config=config)
-  if not os.path.exists(args.out_dir):
-    os.makedirs(args.out_dir)
-  else:
-    os.system(f'rm -r {args.out_dir}/*')
   ds = tf.placeholder_with_default(
         np.random.normal(size=[args.ds_size,args.in_size]).astype(np.float32),
         [args.ds_size,args.in_size])
-  x = tf.get_variable('rec', [args.ds_size,args.in_size])
+  x = tf.get_variable('rec', [args.ds_size,args.in_size],
+                      initializer=tf.initializers.random_normal())
+  batch_mask = tf.placeholder(tf.float32,[args.n_proj])
   proj = []
   mse_output = 0
   kl_output = 0
@@ -65,14 +73,15 @@ def run(args):
     proj_vars.extend(proj[-1].vars)
     out_real.append(tf.stop_gradient(proj[-1](ds)))
     out_fake.append(proj[-1](x))
-    mse_output+=tf.reduce_sum(tf.square(out_fake[-1]-out_real[-1]),axis=1)
-    kl_output+=kl(out_fake[-1],out_real[-1])
+    mse_output+=batch_mask[i]*tf.reduce_sum(\
+                tf.square(out_fake[-1]-out_real[-1]),axis=1)
+    kl_output+=batch_mask[i]*kl(out_real[-1], out_fake[-1], axis=1)
 
   mse_output = tf.reduce_mean(mse_output)
   kl_output = tf.reduce_mean(kl_output)
   recon_dist = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(ds-x),axis=1)))
 
-  optim = tf.train.MomentumOptimizer(learning_rate=1e-1, momentum=0.9)
+  optim = tf.train.MomentumOptimizer(learning_rate=10, momentum=0.9)
   # optim = tf.train.AdamOptimizer(learning_rate=1e-1)
   if args.objective == 'mse':
     step = optim.minimize(mse_output,var_list=[x])
@@ -89,8 +98,15 @@ def run(args):
   writer = tf.summary.FileWriter(args.out_dir, s.graph)
   d = {'mse_output':[], 'recon_dist':[], 'kl_output':[]}
   for ep in range(args.epochs):
+    if args.batch_size<args.n_proj:
+      pos = np.random.permutation(args.n_proj)[:args.batch_size]
+      batch = np.zeros(args.n_proj)
+      batch[pos]=1
+    else:
+      batch=np.ones(args.n_proj)
     _, mse_output_, x_, ds_,recon_dist_,kl_output_, logs_ = \
-      s.run([step,mse_output,x,ds,recon_dist,kl_output,logs])
+      s.run([step,mse_output,x,ds,recon_dist,kl_output,logs],
+            feed_dict={batch_mask: batch})
     if (ep+1)%args.reset_freq == 0:
       s.run(reset_proj)
     d['mse_output'].append(mse_output_)
