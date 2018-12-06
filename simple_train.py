@@ -66,7 +66,7 @@ def run(args: Namespace) -> float:
     accs = []
     for epoch in range(args.nepochs):
         student.train()
-        for data, target in train_loader:
+        for data, target, idx in train_loader:
             output = student(data)
             loss = F.cross_entropy(output, target)
             student_optimizer.zero_grad()
@@ -74,7 +74,8 @@ def run(args: Namespace) -> float:
             student_optimizer.step()
         acc, _, _ = test(student, test_loader, device)
         accs.append(acc)
-        wandb.log({"acc": acc})
+        if args.wandb:
+            wandb.log({"acc": acc})
 
     fitness = np.mean(accs[:5])
 

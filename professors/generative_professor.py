@@ -75,7 +75,8 @@ def what_to_reset(ref_acc: float, nclasses, strategy, accs, ends):
 
 class GenerativeProfessor(Professor):
 
-    def __init__(self, args: Namespace, device, start_params=None) -> None:
+    def __init__(self, args: Namespace, device, 
+                start_params=None,ds_size=None) -> None:
         super(GenerativeProfessor, self).__init__("GENE-PROF", args.verbose)
         self.args = args
         self.nclasses = nclasses = args.nclasses
@@ -84,6 +85,7 @@ class GenerativeProfessor(Professor):
         self.crt_device = device
         self.start_params = start_params
         self.students_per_batch = args.students_per_batch
+        self.ds_size = ds_size
 
         self._init_students()
         self.nstudents = nstudents = len(self.students)
@@ -220,7 +222,14 @@ class GenerativeProfessor(Professor):
 
     def _create_components(self):
         args = self.args
-        self.generator = get_model(generative,
+        if args.generator.name=='MemGenerator':
+            self.generator = get_model(generative,
+                                       args.generator,
+                                       ds_size = self.ds_size,
+                                       in_size=self.in_size,
+                                       nclasses=self.nclasses)
+        else:
+            self.generator = get_model(generative,
                                    args.generator,
                                    in_size=self.in_size,
                                    nclasses=self.nclasses,
@@ -300,7 +309,7 @@ class GenerativeProfessor(Professor):
         return F.cross_entropy(output, target), last_perf
 
     def save_state(self, out_path: str, epoch_no: int,
-                   data=None, target=None) -> None:
+                   data=None, target=None, data_idx=None) -> None:
         generator = self.generator
         encoder = self.encoder
         siamese = self.siamese
@@ -318,7 +327,10 @@ class GenerativeProfessor(Professor):
 
         # 2. generate_some_images
         with torch.no_grad():
-            fake_data, _ = self.generator(nsamples=64,
+            if self.args.generator.name=='MemGenerator':
+                fake_data, _ = self.generator(nsamples=64)
+            else:
+                fake_data, _ = self.generator(nsamples=64,
                                           perf=torch.linspace(10, 90, 64))
             save_image(fake_data.cpu(),
                        os.path.join(out_path, f"samples_{epoch_no:04d}.png"))
@@ -327,8 +339,12 @@ class GenerativeProfessor(Professor):
 
         with torch.no_grad():
             mean, log_var = (None, None) if encoder is None else encoder(data)
-            fake_data, _target = generator(target, mean=mean, log_var=log_var,
-                                           perf=torch.linspace(10, 90, len(data)))
+
+            if self.args.generator.name=='MemGenerator':
+                fake_data, _target = generator(target, idx=data_idx)
+            else:
+                fake_data, _target = generator(target, mean=mean, log_var=log_var,
+                                               perf=torch.linspace(10, 90, len(data)))
             all_data = torch.cat((data, fake_data), dim=0).cpu()
             save_image(all_data,
                        os.path.join(out_path, f"recons_{epoch_no:04d}.png"))
@@ -378,7 +394,7 @@ class GenerativeProfessor(Professor):
         student.zero_grad()
     """
 
-    def process(self, data, target):
+    def process(self, data, target, data_idx):
         student_losses = []
         info = OrderedDict({})
         info_max = OrderedDict({})
@@ -442,7 +458,11 @@ class GenerativeProfessor(Professor):
                 fake_kwargs["mean"] = mean
                 fake_kwargs["log_var"] = log_var
 
-            fake_data, _target = generator(target, **fake_kwargs)
+
+            if self.args.generator.name=='MemGenerator':
+                fake_data, _target = generator(target, idx=data_idx)
+            else:
+                fake_data, _target = generator(target, **fake_kwargs)
 
             if self.need_contrast:
                 contrast_kwargs = {"tmask": tmask, "perf": perf}
@@ -1172,30 +1192,42 @@ class GenerativeProfessor(Professor):
         nclasses = self.nclasses
         eval_samples = self.eval_samples
         if old_model is None:
-            new_generator = get_model(generative,
-                                      args.generator,
-                                      in_size=in_size,
-                                      nclasses=nclasses,
-                                      nz=args.nz,
-                                      nperf=args.nperf)
+            if self.args.generator.name=='MemGenerator':
+                new_generator = get_model(generative,
+                                       args.generator,
+                                       ds_size = self.ds_size,
+                                       in_size=self.in_size,
+                                       nclasses=self.nclasses)
+            else:
+                new_generator = get_model(generative,
+                                          args.generator,
+                                          in_size=in_size,
+                                          nclasses=nclasses,
+                                          nz=args.nz,
+                                          nperf=args.nperf)
             new_generator.to(self.crt_device)
             new_generator.load_state_dict(self.generator.state_dict())
+            if self.args.generator.name=='MemGenerator':
+                new_generator.part = self.generator.part
             return PostTrainGenerativeProfessor(new_generator, nclasses,
-                                                eval_samples)
+                                                eval_samples,self.args)
         assert isinstance(old_model, PostTrainGenerativeProfessor)
         old_model.generator.load_state_dict(self.generator.state_dict())
+        if self.args.generator.name=='MemGenerator':
+            old_model.generator.part = self.generator.part
         old_model.last_perf = 100 / nclasses
         return old_model
 
 
 class PostTrainGenerativeProfessor(PostTrainProfessor):
 
-    def __init__(self, generator, nclasses, eval_samples):
+    def __init__(self, generator, nclasses, eval_samples, args):
         self.generator = generator
         self.generator.eval()
         self.nclasses = nclasses
         self.eval_samples = eval_samples
         self.last_perf = 100 / nclasses
+        self.args=args
 
     def eval_student(self, student: Student,
                      step: int,
@@ -1207,7 +1239,10 @@ class PostTrainGenerativeProfessor(PostTrainProfessor):
         if nsamples is None:
             nsamples = self.eval_samples
         with torch.no_grad():
-            data, target = self.generator(nsamples=nsamples, perf=last_perf)
+            if self.args.generator.name == 'MemGenerator':
+                data, target = self.generator(nsamples=nsamples)
+            else:
+                data, target = self.generator(nsamples=nsamples, perf=last_perf)
 
         output = student(data)
 
