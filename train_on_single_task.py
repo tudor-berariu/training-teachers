@@ -3,7 +3,6 @@ import pickle
 from copy import deepcopy
 from argparse import Namespace
 import concurrent.futures
-
 from termcolor import colored as clr
 import numpy as np
 
@@ -140,7 +139,8 @@ def run(args: Namespace):
 
     train_loader, test_loader, data_info = \
         get_loaders(args.dataset, args.batch_size,
-                    args.test_batch_size, in_size=tuple(args.in_size))
+                    args.test_batch_size, in_size=tuple(args.in_size),
+                    normalize=False)
     train_loader.to(device)
     test_loader.to(device)
 
@@ -319,6 +319,14 @@ def run(args: Namespace):
         fitness = np.mean(scores)
     else:
         fitness = best_fitness
+
+    summary = {
+        "best": fitness,
+        "last-5": np.mean(scores[-5:]),
+    }
+
+    with open(os.path.join(args.out_dir, 'summary.pkl'), 'wb') as handler:
+        pickle.dump(summary, handler, pickle.HIGHEST_PROTOCOL)
 
     info(f"Final fitness: {fitness:.3f}")
 

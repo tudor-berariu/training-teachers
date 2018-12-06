@@ -10,8 +10,16 @@ from tasks.random_dataset import RandomDataset
 # TODO: Other datasets than FashionMNIST
 
 
-ORIGINAL_SIZE = {"FashionMNIST": (1, 28, 28)}
-NCLASSES = {"FashionMNIST": 10,'random': 10}
+
+ORIGINAL_SIZE = {"FashionMNIST": (1, 28, 28),
+                 "MNIST": (1, 28, 28),
+                 "CIFAR10": (3, 32, 32)}
+
+NCLASSES = {"FashionMNIST": 10,
+            "MNIST": 10,
+            "CIFAR10": 10,
+            "random": 10}
+
 MEAN_STD = {"FashionMNIST": {(1, 32, 32): (0.2190, 0.3318,),
                (1, 28, 28): (0.2860, 0.3530,)}}
 
