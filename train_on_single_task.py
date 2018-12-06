@@ -140,7 +140,8 @@ def run(args: Namespace):
 
     train_loader, test_loader, data_info = \
         get_loaders(args.dataset, args.batch_size,
-                    args.test_batch_size, in_size=tuple(args.in_size))
+                    args.test_batch_size, in_size=tuple(args.in_size),
+                    limit=args.dataset_limit)
     train_loader.to(device)
     test_loader.to(device)
 

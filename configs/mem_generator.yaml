@@ -5,6 +5,7 @@ verbose: 1
 script: simple_train.py
 
 dataset: random
+dataset_limit: 100
 batch_size: 40
 test_batch_size: 40
 in_size: [1, 32, 32]
@@ -60,7 +61,7 @@ professor:
 
   optimizer:
     name: Adam
-    lr: .001
+    lr: .01
 
   c_nll: 0
   c_kl: 1

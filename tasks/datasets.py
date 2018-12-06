@@ -5,6 +5,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tasks.random_dataset import RandomDataset
+from numpy.random import permutation
 
 
 # TODO: Other datasets than FashionMNIST
@@ -25,7 +26,8 @@ class InMemoryDataLoader(Iterator):
 
   def __init__(self, loader: DataLoader,
          batch_size: int,
-         shuffle: bool = False) -> None:
+         shuffle: bool = False,
+         limit: int = 0) -> None:
     full_data, full_target = None, None
     self.batch_size = batch_size
     self.shuffle = shuffle
@@ -35,8 +37,13 @@ class InMemoryDataLoader(Iterator):
         full_target = torch.cat((full_target, target), dim=0)
       else:
         full_data, full_target = data, target
-    self.data = full_data
-    self.target = full_target
+    if limit==0 or limit>=len(self.data):
+      self.data = full_data
+      self.target = full_target
+    else:
+      perm = permutation(len(data))
+      self.data = full_data[perm]
+      self.target = full_target[perm]  
     self.length = len(self.data)
     self.idxs, self.offset = None, None
 
@@ -91,7 +98,8 @@ def get_loaders(dataset: str,
         batch_size: int,
         test_batch_size: int,
         in_size: Size = None,
-        normalize: bool = False):
+        normalize: bool = False,
+        limit: int = 0):
 
   if dataset!='random':
     if in_size is None:
@@ -128,7 +136,8 @@ def get_loaders(dataset: str,
       transform=transforms.Compose(transfs))
   test_loader = DataLoader(testset, batch_size=len(testset), shuffle=False)
 
-  train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True)
-  test_loader = InMemoryDataLoader(test_loader, test_batch_size)
+  train_loader = InMemoryDataLoader(train_loader, batch_size, shuffle=True,
+                                    limit=limit)
+  test_loader = InMemoryDataLoader(test_loader, test_batch_size, limit=limit)
 
   return train_loader, test_loader, (in_size, NCLASSES[dataset], nrmlz)
