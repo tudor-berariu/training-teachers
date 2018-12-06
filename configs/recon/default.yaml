@@ -1,11 +1,18 @@
+dataset: 'fashion_mnist'
+proj: 'conv'
 ds_size: 100
-in_size: 1000
+in_size: [1000]
 out_size: 10
 n_proj: 50
-epochs: 2000
-layers: [250]
+epochs: 5000
+lin:
+  layers: [500]
+conv:
+  layers: [[5,5,8],[3,3,16],[500]]
 activation: 'relu'
 verbose: 1
 reset_freq: 1
 objective: 'kl'
 batch_size: 100
+optim: 'adam'
+lr: 0.01

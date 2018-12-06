@@ -36,11 +36,11 @@ student_optimizer:
 
 professor:
   name: GenerativeProfessor
-  nstudents: 18
+  nstudents: 50
   random_students: no
-  trained_on_fake: 12
+  trained_on_fake: 50
 
-  students_per_batch: 2
+  students_per_batch: 10
 
 
   nz: 32
@@ -85,6 +85,6 @@ professor:
 
   eval_samples: 128
 
-  student_reset: linspace
+  student_reset: everystep
 
   report_freq: 400
