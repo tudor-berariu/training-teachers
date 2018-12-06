@@ -78,7 +78,7 @@ professor:
 
   c_nll: 0
   c_kl: 1
-  c_contrast_kl: 0.5
+  c_contrast_kl: 0
   c_adv: 0
   c_siamese: 0
   c_grad_mse: 0
@@ -99,6 +99,6 @@ professor:
 
   eval_samples: 128
 
-  student_reset: powspace
+  student_reset: everystep
 
   report_freq: 16384
