@@ -19,5 +19,5 @@ class RandomDataset(Dataset):
 
 if __name__=='__main__':
   #test
-  ds = RandomDataset(10,100)
+  ds = RandomDataset(100,10)
   print(ds[-1][1])
