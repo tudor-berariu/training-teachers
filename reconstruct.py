@@ -155,7 +155,7 @@ def run(args: Namespace):
                     real_ps[sidx] = F.softmax(student(real_data[idx]), dim=1)
                 fake_data, fake_targets = data_model(idx)
                 with torch.no_grad():
-                    crt_mse += F.mse_loss(fake_data, real_data).item()
+                    crt_mse += F.mse_loss(fake_data, real_data[idx]).item()
 
             fake_output = student(fake_data)
             fake_logp = F.log_softmax(fake_output, dim=1)
