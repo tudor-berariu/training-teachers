@@ -45,7 +45,7 @@ class InMemoryDataLoader(Iterator):
         full_target = torch.cat((full_target, target), dim=0)
       else:
         full_data, full_target = data, target
-    if limit==0 or limit>=len(self.data):
+    if limit==0 or limit>=len(full_data):
       self.data = full_data
       self.target = full_target
     else:

@@ -6,20 +6,20 @@ script: simple_train.py
 
 dataset: random
 dataset_limit: 100
-batch_size: 40
-test_batch_size: 40
+batch_size: 50
+test_batch_size: 50
 in_size: [1, 32, 32]
 
 random_params: yes
 
 c_l2: 0
-nepochs: 1000
+nepochs: 3000
 
 evaluation:
-  freq: 8000
-  nstudents: 3
+  freq: 40000
+  nstudents: 2
   teaching_steps: 501
-  eval_freq: 20
+  eval_freq: 501
   async: no
   continuous: no
 
