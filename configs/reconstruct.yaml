@@ -1,0 +1,27 @@
+no_cuda: no
+tensorboard: yes
+wandb: no
+
+dataset: FashionMNIST
+nfake: 100
+nreal: 5000
+
+batch_size: 0
+steps_no: 500
+
+reset_freq: 1
+nstudents: 10
+
+student:
+  name: ConvNet
+  channels: []
+  units: [100]
+  use_bias: no
+  use_dropout: no
+  use_batch_norm: no
+
+optimizer:
+  name: Adam
+  lr: 0.01
+
+report_freq: 100
