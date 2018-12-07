@@ -4,7 +4,7 @@ run_id: 0
 verbose: 1
 script: simple_train.py
 
-dataset: random
+dataset: FashionMNIST
 dataset_limit: 100
 batch_size: 50
 test_batch_size: 50
@@ -25,10 +25,10 @@ evaluation:
 
 student:
   name: ConvNet
-  channels: [32, 32]
+  channels: [16, 32]
   units: [256]
-  use_bias: no
-  use_dropout: yes
+  use_bias: yes
+  use_dropout: no
   use_batch_norm: no
 
 student_optimizer:

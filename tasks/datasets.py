@@ -50,8 +50,8 @@ class InMemoryDataLoader(Iterator):
       self.target = full_target
     else:
       perm = permutation(len(data))
-      self.data = full_data[perm]
-      self.target = full_target[perm]  
+      self.data = full_data[perm][:limit]
+      self.target = full_target[perm][:limit]  
     self.length = len(self.data)
     self.idxs, self.offset = None, None
 
