@@ -31,12 +31,11 @@ def test(model, loader, device, verbose: int = 1):
     nclasses = model.nclasses  # Our classifiers provide this info
     conf_matrix = torch.zeros(nclasses, nclasses, device=device)
     loss, correct = .0, 0
-
     model.eval()
     with torch.no_grad():
         for data, target, data_idx in loader:
-            data, target, data_idx = data.to(device), target.to(device), \
-                                        data_idx.to(device)
+            data, target = data.to(device), target.to(device)
+            data_idx = data_idx.to(device)
             output = model(data)
             loss += F.cross_entropy(output, target, reduction="sum").item()
             _, prediction = output.max(1)
@@ -65,6 +64,7 @@ def test_professor(agent, loader, device, args, state_dict=None,
     all_accs = []  # type: List[float]
     nstudents = args.evaluation.nstudents
     nsteps = args.evaluation.teaching_steps
+    lastk = args.evaluation.last_k
     info = printer("TEACH", 1, verbose=verbose)
     conf = None
 
@@ -92,16 +92,16 @@ def test_professor(agent, loader, device, args, state_dict=None,
                 acc, loss, conf = test(student, loader, device, verbose=False)
                 student.train()
                 crt_accs.append(acc)
-                info("Syn. NLL:", f"{synthetic_loss.item():.3f};",
+                info("Syn. Loss:", f"{synthetic_loss.item():.5f};",
                      "Syn. Acc:", f"{synthetic_acc:.2f}%;",
                      "" if l2_loss is None else f"L2: {l2_loss.item():.3f};",
-                     clr(f"Real NLL: {loss:.3f}", "yellow") + ";",
+                     clr(f"Real NLL: {loss:.4f}", "yellow") + ";",
                      clr(f"Real Acc: {acc:.1f}%", "yellow"),
                      tags=[f"Student {sidx:d}/{nstudents:d}",
                            f"{step + 1: 4d}/{nsteps:d}"])
         print_conf(conf, print_func=info)
-        if len(all_accs) > 25:
-            crt_accs = crt_accs[-25:]  # Keep the last scores only
+        if len(all_accs) > lastk:
+            crt_accs = crt_accs[-lastk:]  # Keep the last scores only
         all_accs.append(np.mean(crt_accs))
     final_score = np.mean(all_accs)
     info(clr(f" >>> Final score = {final_score:.3f} <<<", "yellow"))
@@ -189,7 +189,7 @@ def run(args: Namespace):
     Professor = getattr(professors, prof_args.name)
     if args.professor.generator.name == 'MemGenerator':
         professor = Professor(prof_args, device, start_params=start_params,
-                                ds_size = train_loader.ds_size)
+                              ds_size=train_loader.ds_size)
     else:
         professor = Professor(prof_args, device, start_params=start_params)
 
@@ -213,7 +213,7 @@ def run(args: Namespace):
     for epoch in range(1, args.nepochs + 1):
         for _batch_idx, (data, target, data_idx) in enumerate(train_loader):
             data, target, data_idx = data.to(device), target.to(device),\
-                                        data_idx.to(device)
+                data_idx.to(device)
             found_nan = professor.process(data, target, data_idx)
             seen_examples += len(data)
 
