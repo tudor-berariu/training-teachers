@@ -1,10 +1,10 @@
 from argparse import Namespace
-from typing import List, Tuple, Union
 from functools import reduce
+import pickle
 from operator import mul
 import os
+from typing import List, Tuple, Union
 import numpy as np
-
 import torch
 from torch import Tensor as T
 from torch import nn
@@ -17,6 +17,11 @@ from utils import printer, args_to_dict
 from utils import get_optimizer
 from tasks.datasets import get_loaders
 from train_on_single_task import test_professor
+
+
+def best_and_last(values, wlen) -> Tuple[float, float]:
+    avgs = np.convolve(values, np.ones((wlen,)) / wlen)[(wlen - 1):(1 - wlen)]
+    return avgs.max(), avgs[-1]
 
 
 def entropy(scores: T) -> T:
@@ -170,7 +175,6 @@ def run(args: Namespace):
 
     ridxs = torch.randperm(nreal)[:72].long().to(device)
 
-
     # -------------------------------------------------------------------------
     #
     # Initialize data model and its optimizer.
@@ -190,6 +194,8 @@ def run(args: Namespace):
     # -------------------------------------------------------------------------
     #
     # Start training
+
+    fake_rt_accs, fake_ft_accs, proto_accs = [], [], []
 
     for step in range(1, args.steps_no + 1):
 
@@ -255,6 +261,10 @@ def run(args: Namespace):
             writer.add_scalar('teach/faked-faket-acc', fake_acc_2, step)
             writer.add_scalar('teach/proto-acc', proto_acc, step)
 
+            fake_rt_accs.append(fake_acc_1)
+            fake_ft_accs.append(fake_acc_2)
+            proto_accs.append(proto_acc)
+
             info(f"Step {step:5d} | Fake (RT): {fake_acc_1:6.2f}% | "
                  f"Fake (FT): {fake_acc_2:6.2f}% | Proto: {proto_acc:6.2f}%")
 
@@ -281,6 +291,19 @@ def run(args: Namespace):
     if args.tensorboard:
         writer.export_scalars_to_json(os.path.join(args.out_dir, "trace.json"))
         writer.close()
+
+    best_acc1, last_acc1 = best_and_last(fake_rt_accs, 5)
+    best_acc2, last_acc2 = best_and_last(fake_ft_accs, 5)
+    best_acc3, last_acc3 = best_and_last(proto_accs, 5)
+
+    summary = {
+        "best_fake_rt": best_acc1, "last_fake_rt": last_acc1,
+        "best_fake_ft": best_acc2, "last_fake_ft": last_acc2,
+        "best_proto": best_acc3, "last_proto": last_acc3,
+    }
+
+    with open(os.path.join(args.out_dir, 'summary.pkl'), 'wb') as handler:
+        pickle.dump(summary, handler, pickle.HIGHEST_PROTOCOL)
 
 
 def main() -> None:
