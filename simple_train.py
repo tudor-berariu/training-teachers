@@ -66,7 +66,7 @@ def run(args: Namespace) -> float:
     accs = []
     for epoch in range(args.nepochs):
         student.train()
-        for data, target in train_loader:
+        for data, target, idx in train_loader:
             output = student(data)
             loss = F.cross_entropy(output, target)
             student_optimizer.zero_grad()

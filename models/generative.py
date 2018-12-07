@@ -57,6 +57,47 @@ class ConvEncoder(nn.Module):
         return self.mu_linear(x), self.sigma_linear(x)
 
 
+class MemGenerator(nn.Module):
+    def __init__(self, in_size, nclasses,ds_size):
+        super(MemGenerator, self).__init__()
+        self.dim = np.prod(in_size)
+        self.in_size = in_size
+        self.nclasses = nclasses
+        self.mem = torch.zeros([ds_size, self.dim], requires_grad=True)
+        self.mem = torch.nn.Parameter(self.mem)
+        torch.nn.init.xavier_uniform(self.mem)
+        self.part = []
+        for i in range(nclasses):
+            self.part.append([])
+        self.ds_size = ds_size
+
+    def to(self, device):
+        self.device = device
+        return super(MemGenerator, self).to(device)
+
+    def forward(self,target = None,nsamples = None,idx = None):
+        if nsamples is not None:
+            target = torch.randint(high=self.nclasses, dtype=torch.long,
+                                    size=[nsamples])
+            target = target.to(self.device)
+            idx = None
+        if target is not None and idx is None:
+            idx = []
+            for t in target:
+                idx.append(np.random.choice(self.part[t]))
+            idx = torch.LongTensor(idx)
+        elif target is not None and idx is not None:
+            for (i,t) in enumerate(target):
+                if idx[i] not in self.part[t]:
+                    self.part[t].append(idx[i])
+
+        idx_ = torch.zeros([len(idx),self.ds_size])
+        idx_[torch.arange(0,len(idx),dtype=torch.long),idx] = 1
+        idx_ = idx_.to(self.device)
+        return torch.reshape(idx_ @ self.mem, [-1,*self.in_size]), target
+
+
+
 class GenericGenerator(nn.Module):
     def __init__(self,
                  in_size: Tuple[int, int, int],

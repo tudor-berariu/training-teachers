@@ -1,0 +1,91 @@
+wandb: no
+no_cuda: no
+run_id: 0
+verbose: 1
+script: simple_train.py
+
+dataset: FashionMNIST
+dataset_limit: 100
+batch_size: 50
+test_batch_size: 50
+in_size: [1, 32, 32]
+
+random_params: yes
+
+c_l2: 0
+nepochs: 3000
+
+evaluation:
+  freq: 40000
+  nstudents: 2
+  teaching_steps: 501
+  eval_freq: 501
+  async: no
+  continuous: no
+
+student:
+  name: ConvNet
+  channels: [16, 32]
+  units: [256]
+  use_bias: yes
+  use_dropout: no
+  use_batch_norm: no
+
+student_optimizer:
+  name: Adam
+  lr: 0.001
+
+professor:
+  name: GenerativeProfessor
+  nstudents: 50
+  random_students: no
+  trained_on_fake: 50
+
+  students_per_batch: 10
+
+
+  nz: 32
+  nperf: 16
+
+  generator:
+    name: MemGenerator
+
+  label_to_discriminator: yes
+  permute_before_discriminator: yes
+
+  
+  siamese_detach_other: yes
+  contrast_from_real_data: yes
+  ctrl_loss: no
+  siamese_margin: 1.0
+
+  optimizer:
+    name: Adam
+    lr: .01
+
+  c_nll: 0
+  c_kl: 1
+  c_contrast_kl: 0
+  c_adv: 0
+  c_siamese: 0
+  c_grad_mse: 0
+  c_grad_cos: 0
+  c_next_nll: 0
+  c_contrast_next_nll: 0
+  c_next_nll2: 0
+  c_next_kl: 0
+  c_hess: 0
+  c_d: 0
+  c_recon: 0
+  c_latent_kl: 0
+  next_lr: .001
+  target_dropout: 0
+
+  grad_type: example
+  grad_samples: 128
+
+  eval_samples: 128
+
+  student_reset: everystep
+
+  report_freq: 400

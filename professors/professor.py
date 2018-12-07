@@ -18,7 +18,7 @@ class Professor:
         self.info = printer(name, 1, verbose=verbose)
         self.debug = printer(name, 2, verbose=verbose)
 
-    def process(self, data, target) -> bool:
+    def process(self, data, target, data_idx = None) -> bool:
         raise NotImplementedError
 
     def end_epoch(self):
@@ -42,7 +42,7 @@ class DummyProfessor(Professor):
         self.in_size = prof_args.in_size
         self.device = device
 
-    def process(self, data, target) -> bool:
+    def process(self, data, target, data_idx=None) -> bool:
         return False
 
     def eval_student(self, student, step):
