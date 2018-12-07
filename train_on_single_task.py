@@ -5,7 +5,7 @@ from argparse import Namespace
 import concurrent.futures
 from termcolor import colored as clr
 import numpy as np
-
+from typing import List
 import torch
 import torch.nn.functional as F
 
@@ -61,7 +61,7 @@ def test(model, loader, device, verbose: int = 1):
 
 def test_professor(agent, loader, device, args, state_dict=None,
                    verbose: int = 1):
-    all_accs = []
+    all_accs = []  # type: List[float]
     nstudents = args.evaluation.nstudents
     nsteps = args.evaluation.teaching_steps
     info = printer("TEACH", 1, verbose=verbose)
