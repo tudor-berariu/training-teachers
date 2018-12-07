@@ -1,11 +1,11 @@
-import os
-import pickle
-from copy import deepcopy
 from argparse import Namespace
 import concurrent.futures
-from termcolor import colored as clr
-import numpy as np
+from copy import deepcopy
+import os
+import pickle
 from typing import List
+import numpy as np
+from termcolor import colored as clr
 import torch
 import torch.nn.functional as F
 
@@ -185,7 +185,6 @@ def run(args: Namespace):
     prof_args.student = args.student
     prof_args.student_optimizer = args.student_optimizer
 
-    # TODO: Other professors
     Professor = getattr(professors, prof_args.name)
     if args.professor.generator.name == 'MemGenerator':
         professor = Professor(prof_args, device, start_params=start_params,
@@ -246,7 +245,8 @@ def run(args: Namespace):
                 eval_professor = professor.post_train_professor(
                     old_model=eval_professor)
                 result = executor.submit(test_professor,
-                                         eval_professor, test_loader, device, args,
+                                         eval_professor, test_loader, device,
+                                         args,
                                          state_dict=start_params,
                                          verbose=0)
                 async_result = (seen_examples, result)
