@@ -3,25 +3,42 @@ tensorboard: yes
 wandb: no
 
 dataset: FashionMNIST
+in_size: [1, 28, 28]
+test_batch_size: 10000
 nfake: 100
-nreal: 5000
+nreal: 10000
 
-batch_size: 10
-steps_no: 500
+batch_size: 128
+steps_no: 1000
 
 reset_freq: 1
-nstudents: 10
+students_per_batch: 5
 
 student:
   name: ConvNet
   channels: []
   units: [100]
   use_bias: no
-  use_dropout: no
+  use_dropout: yes
   use_batch_norm: no
+
+student_optimizer:
+  name: Adam
+  lr: 0.005
+  nesterov: delete
+  momentum: delete
+
+c_l2: 0
 
 optimizer:
   name: Adam
   lr: 0.01
 
 report_freq: 100
+eval_freq: 200
+
+evaluation:
+  nstudents: 2
+  teaching_steps: 2000
+  eval_freq: 25
+  last_k: 25
