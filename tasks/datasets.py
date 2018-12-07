@@ -5,10 +5,6 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tasks.random_dataset import RandomDataset
-from numpy.random import permutation
-
-
-# TODO: Other datasets than FashionMNIST
 
 
 ORIGINAL_SIZE = {"FashionMNIST": (1, 28, 28),
