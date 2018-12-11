@@ -2,6 +2,7 @@ wandb: no
 no_cuda: no
 run_id: 0
 verbose: 1
+tensorboard: yes
 script: simple_train.py
 
 dataset: FashionMNIST
@@ -16,12 +17,13 @@ c_l2: 0
 nepochs: 3000
 
 evaluation:
-  freq: 40000
+  freq: 20000
   nstudents: 2
   teaching_steps: 501
   eval_freq: 501
   async: no
   continuous: no
+  last_k: 1
 
 student:
   name: ConvNet

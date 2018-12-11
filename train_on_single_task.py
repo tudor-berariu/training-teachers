@@ -294,11 +294,13 @@ def run(args: Namespace):
                                              verbose=0)
                     async_result = (seen_examples, result)
                 else:
+                    eval_professor = professor.post_train_professor(
+                        old_model=eval_professor)
                     new_scores = test_professor(eval_professor, test_loader,
                                                 device,
                                                 args, state_dict=start_params)
 
-                    log_new_scores(seen_at, new_scores, scores, scores_at,
+                    log_new_scores(seen_examples, new_scores, scores, scores_at,
                                    info, writer)
                 last_professor_eval += args.evaluation.freq
 
