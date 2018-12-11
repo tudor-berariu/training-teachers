@@ -8,10 +8,11 @@ from termcolor import colored as clr
 import numpy as np
 import torch
 from torch import Tensor
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn
 import torch.nn.functional as F
-import torch.autograd as autograd
+from torch import optim
+from torch import autograd
+from torchvision.utils import save_image
 
 from models import Student
 from models import get_model
@@ -21,8 +22,6 @@ from professors.professor import Professor, PostTrainProfessor
 
 from utils import get_optimizer, nparams, grad_info
 from loss_utils import cos, mse, l2
-
-from torchvision.utils import save_image
 
 
 def grad_of(outputs, inputs, grad_outputs=None):
@@ -75,12 +74,12 @@ def what_to_reset(ref_acc: float, nclasses, strategy, accs, ends):
 
 class GenerativeProfessor(Professor):
 
-    def __init__(self, args: Namespace, device, 
-                start_params=None,ds_size=None) -> None:
+    def __init__(self, args: Namespace, device,
+                 start_params=None, ds_size=None) -> None:
         super(GenerativeProfessor, self).__init__("GENE-PROF", args.verbose)
         self.args = args
         self.nclasses = nclasses = args.nclasses
-        self.in_size = in_size = args.in_size
+        self.in_size = args.in_size
         self.nrmlz = args.nrmlz
         self.crt_device = device
         self.start_params = start_params
@@ -159,7 +158,7 @@ class GenerativeProfessor(Professor):
         self.need_contrast_grad = check_need(w_contrast_grad)
 
         self.need_some_grad = self.need_fake_grad or self.need_real_grad or \
-                              self.need_contrast_grad
+            self.need_contrast_grad
 
         # ---------------------------------------------------------------------
 
@@ -192,7 +191,7 @@ class GenerativeProfessor(Professor):
 
         self.avg_fake_acc = [100.0 / nclasses] * len(self.students)
         self.avg_real_acc = [100.0 / nclasses] * len(self.students)
-        self.max_known_real_acc = 150 /nclasses
+        self.max_known_real_acc = 150 / nclasses
         self.last_perf = None  # used during evaluation
 
         self.info_trace = OrderedDict({})
@@ -205,7 +204,7 @@ class GenerativeProfessor(Professor):
     def _init_students(self):
         in_size, nclasses = self.in_size, self.nclasses
         self.students, self.student_optimizers = [], []
-        for idx in range(self.args.nstudents):
+        for _idx in range(self.args.nstudents):
             if not self.args.random_students:
                 student = get_model(classifiers, self.args.student,
                                     in_size=in_size,
@@ -213,7 +212,8 @@ class GenerativeProfessor(Professor):
                 if self.start_params:
                     student.load_state_dict(self.start_params)
             else:
-                student = sample_classifier(in_size, nclasses).to(self.crt_device)
+                student = sample_classifier(
+                    in_size, nclasses).to(self.crt_device)
             student_optimizer = get_optimizer(student.parameters(),
                                               self.args.student_optimizer)
             self.students.append(student)
@@ -222,19 +222,19 @@ class GenerativeProfessor(Professor):
 
     def _create_components(self):
         args = self.args
-        if args.generator.name=='MemGenerator':
+        if args.generator.name == 'MemGenerator':
             self.generator = get_model(generative,
                                        args.generator,
-                                       ds_size = self.ds_size,
+                                       ds_size=self.ds_size,
                                        in_size=self.in_size,
                                        nclasses=self.nclasses)
         else:
             self.generator = get_model(generative,
-                                   args.generator,
-                                   in_size=self.in_size,
-                                   nclasses=self.nclasses,
-                                   nz=args.nz,
-                                   nperf=args.nperf)
+                                       args.generator,
+                                       in_size=self.in_size,
+                                       nclasses=self.nclasses,
+                                       nz=args.nz,
+                                       nperf=args.nperf)
         self.generator.to(self.crt_device)
         self.info(nparams(self.generator,
                           name=f"Generator:{self.generator_idx:d}"))
@@ -327,11 +327,11 @@ class GenerativeProfessor(Professor):
 
         # 2. generate_some_images
         with torch.no_grad():
-            if self.args.generator.name=='MemGenerator':
+            if self.args.generator.name == 'MemGenerator':
                 fake_data, _ = self.generator(nsamples=64)
             else:
                 fake_data, _ = self.generator(nsamples=64,
-                                          perf=torch.linspace(10, 90, 64))
+                                              perf=torch.linspace(10, 90, 64))
             save_image(fake_data.cpu(),
                        os.path.join(out_path, f"samples_{epoch_no:04d}.png"))
 
@@ -340,7 +340,7 @@ class GenerativeProfessor(Professor):
         with torch.no_grad():
             mean, log_var = (None, None) if encoder is None else encoder(data)
 
-            if self.args.generator.name=='MemGenerator':
+            if self.args.generator.name == 'MemGenerator':
                 fake_data, _target = generator(target, idx=data_idx)
             else:
                 fake_data, _target = generator(target, mean=mean, log_var=log_var,
@@ -349,52 +349,7 @@ class GenerativeProfessor(Professor):
             save_image(all_data,
                        os.path.join(out_path, f"recons_{epoch_no:04d}.png"))
 
-    """
-    def end_task(self, is_last: bool = False) -> None:
-        if is_last:
-            return
-        self.old_generator = self.generator
-        self.old_generator.eval()
-
-        self.generator, self.encoder, self.discriminator = None, None, None
-        self.prof_optimizer, self.d_optimizer = None, None
-        self.generator_idx += 1
-
-        self._create_components()
-
-
-    def init_student(self, student, optimizer_args, nsteps: int = None):
-        if nsteps is None:
-            nsteps = np.random.randint(1000)
-        nsamples = self.eval_samples
-        student_optimizer = get_optimizer(student.parameters(),
-                                          optimizer_args)
-        for _step in range(nsteps):
-            student_optimizer.zero_grad()
-            with torch.no_grad():
-                data, target = self.generator(nsamples=nsamples)
-            output = student(data)
-            loss = F.cross_entropy(output, target)
-            if self.coeffs.c_l2 > 0:
-                l2_loss = l2(student.parameters()) * self.coeffs.c_l2
-                loss = loss + l2_loss
-            loss.backward()
-            student_optimizer.step()
-
-        with torch.no_grad():
-            data, target = self.generator(nsamples=nsamples)
-            output = student(data)
-            loss = F.cross_entropy(output, target).item()
-            pred = output.max(1, keepdim=True)[1]
-            correct = pred.eq(target.view_as(pred)).sum().item()
-            acc = (correct / len(data) * 100)
-            print(f"[INIT_] Left student after {nsteps:d} steps "
-                  f"with Synthetic NLL={loss:.3f} and "
-                  f"Accuracy: {acc:.2f}%")
-        student.zero_grad()
-    """
-
-    def process(self, data, target, data_idx):
+    def process(self, data, target, data_idx=None):
         student_losses = []
         info = OrderedDict({})
         info_max = OrderedDict({})
@@ -458,8 +413,7 @@ class GenerativeProfessor(Professor):
                 fake_kwargs["mean"] = mean
                 fake_kwargs["log_var"] = log_var
 
-
-            if self.args.generator.name=='MemGenerator':
+            if self.args.generator.name == 'MemGenerator':
                 fake_data, _target = generator(target, idx=data_idx)
             else:
                 fake_data, _target = generator(target, **fake_kwargs)
@@ -603,7 +557,8 @@ class GenerativeProfessor(Professor):
 
                 similar_dist = (v_fake - v_similar).pow(2).sum(dim=1)
                 sq_dist = (v_fake - v_contrast).pow(2).sum(dim=1).sqrt()
-                contrast_dist = torch.clamp(self.margin - sq_dist, min=0).pow(2)
+                contrast_dist = torch.clamp(
+                    self.margin - sq_dist, min=0).pow(2)
                 similar_loss = similar_dist.mean() * coeffs.c_siamese
                 contrast_loss = contrast_dist.mean() * coeffs.c_siamese
                 siamese_loss = similar_loss + contrast_loss
@@ -611,15 +566,18 @@ class GenerativeProfessor(Professor):
 
                 if self.ctrl_loss:
                     self.ctrl_optimizer.zero_grad()
-                    ctrl_loss = F.cross_entropy(self.ctrl_classifier(v_fake.detach()), target)
+                    ctrl_loss = F.cross_entropy(
+                        self.ctrl_classifier(v_fake.detach()), target)
                     ctrl_loss.backward()
                     self.ctrl_optimizer.step()
                     info["Control Classifier"] = info.get("Control Classifier", 0) +\
                         ctrl_loss.item()
 
                 info["Siamese"] = info.get("Siamese", 0) + siamese_loss.item()
-                info["Siamese - similar"] = info.get("Siamese - similar", 0) + similar_loss.item()
-                info["Siamese - contrast"] = info.get("Siamese - contrast", 0) + contrast_loss.item()
+                info["Siamese - similar"] = info.get(
+                    "Siamese - similar", 0) + similar_loss.item()
+                info["Siamese - contrast"] = info.get(
+                    "Siamese - contrast", 0) + contrast_loss.item()
                 del v_similar, v_contrast, v_fake, similar_dist, contrast_dist
                 del similar_loss, contrast_loss, siamese_loss
 
@@ -672,10 +630,10 @@ class GenerativeProfessor(Professor):
                     reduction="sum")
                 adv_loss *= coeffs.c_adv
                 professor_loss += adv_loss
-                info["Adversarial"] = info.get("Adversarial", 0) + adv_loss.item()
+                info["Adversarial"] = info.get(
+                    "Adversarial", 0) + adv_loss.item()
 
                 del adv_loss
-
 
             # -----------------------------------------------------------------
             #
@@ -726,9 +684,11 @@ class GenerativeProfessor(Professor):
             # on synthetic data)
 
             if coeffs.c_next_nll2 > 0:
-                next_nll2 = self._next_nll2(student, fake_data, target, aligned_grads)
+                next_nll2 = self._next_nll2(
+                    student, fake_data, target, aligned_grads)
                 professor_loss += next_nll2
-                info["Next NLL (2)"] = info.get("Next NLL (2)", 0) + next_nll2.item()
+                info["Next NLL (2)"] = info.get(
+                    "Next NLL (2)", 0) + next_nll2.item()
                 del next_nll2
 
             # -----------------------------------------------------------------
@@ -812,7 +772,6 @@ class GenerativeProfessor(Professor):
             #
             # -----------------------------------------------------------------
 
-
             # -----------------------------------------------------------------
             #
             # -- Post computation
@@ -831,7 +790,7 @@ class GenerativeProfessor(Professor):
             [old_value] = self.info_trace.get(key, [value])
             self.info_trace[key] = [max(old_value, value)]
 
-        self.nseen = nseen = self.nseen + len(orig_data)
+        self.nseen = self.nseen + len(orig_data)
         self.report()
         return False
 
@@ -839,15 +798,15 @@ class GenerativeProfessor(Professor):
         if self.nseen - self.last_report >= self.report_freq:
             info = OrderedDict({"epoch": self.epoch, "Step": self.nseen})
             info.update(self.info_trace)
-            if self.args.wandb:
-                import wandb
-                wandb.log(info)
             summary = []
             for (key, vals) in info.items():
                 if isinstance(vals, list):
                     mean, std = np.mean(vals), np.std(vals)
                     summary.append((key, mean, std))
                     self.global_trace.setdefault(key, []).append((mean, std))
+                    if self.args.writer is not None:
+                        writer = self.args.writer
+                        writer.add_scalar(f"prof/{key:s}", mean, self.nseen)
                 else:
                     summary.append((key, vals))
                     self.global_trace.setdefault(key, []).append(vals)
@@ -877,12 +836,12 @@ class GenerativeProfessor(Professor):
                 max_f_on_f_idx = np.argmax(avg_fake_acc[nreal:])
                 max_f_on_f = avg_fake_acc[max_f_on_f_idx + nreal]
                 fake_accs[max_f_on_f_idx + nreal] = clr(f"{max_f_on_f:5.2f}",
-                                                "white", "on_green")
+                                                        "white", "on_green")
 
                 max_f_on_r_idx = np.argmax(avg_real_acc[nreal:])
                 max_f_on_r = avg_real_acc[max_f_on_r_idx + nreal]
                 real_accs[max_f_on_r_idx + nreal] = clr(f"{max_f_on_r:5.2f}",
-                                                "yellow", "on_green")
+                                                        "yellow", "on_green")
 
             self.info(" | ".join(fake_accs[:nreal]),
                       clr("|||", "yellow"),
@@ -934,7 +893,8 @@ class GenerativeProfessor(Professor):
 
         for _real_grads, fake_grads, contrast_grads, mask in aligned_grads:
             new_params, contrast_params = OrderedDict({}), OrderedDict({})
-            pg_pairs = zip(student.named_parameters(), fake_grads, contrast_grads)
+            pg_pairs = zip(student.named_parameters(),
+                           fake_grads, contrast_grads)
             for (name, param), grad, contrast_grad in pg_pairs:
                 new_params[name] = param.detach() - coeffs.next_lr * grad
                 if do_contrast:
@@ -974,7 +934,8 @@ class GenerativeProfessor(Professor):
             new_params = OrderedDict({})
             pg_pairs = zip(student.named_parameters(), real_grads)
             for (name, param), grad in pg_pairs:
-                new_params[name] = param.detach() - coeffs.next_lr * grad.detach()
+                new_params[name] = param.detach() - coeffs.next_lr * \
+                    grad.detach()
             if mask is None:
                 next_output = student(fake_data, params=new_params)
                 next_nll2 += F.cross_entropy(next_output, target)
@@ -996,7 +957,8 @@ class GenerativeProfessor(Professor):
             if self.need_fake_grad:
                 fake_g = grad_of(fake_nlls.mean(), student.parameters())
             if self.need_contrast_grad:
-                contrast_g = grad_of(contrast_nlls.mean(), student.parameters())
+                contrast_g = grad_of(contrast_nlls.mean(),
+                                     student.parameters())
                 for cgrad in contrast_g:
                     cgrad.detach_()
             aligned_grads.append((real_g, fake_g, contrast_g, None))
@@ -1013,7 +975,8 @@ class GenerativeProfessor(Professor):
                         fake_g = grad_of(fake_nll_i, student.parameters())
                     if self.need_contrast_grad:
                         contrast_nll_i = contrast_nlls[mask].mean()
-                        contrast_g = grad_of(contrast_nll_i, student.parameters())
+                        contrast_g = grad_of(
+                            contrast_nll_i, student.parameters())
                         contrast_g = tuple([cg.detach() for cg in contrast_g])
 
                     aligned_grads.append((real_g, fake_g, contrast_g, mask))
@@ -1023,13 +986,17 @@ class GenerativeProfessor(Professor):
             for idx in idxs:
                 real_g, fake_g, contrast_g = None, None, None
                 if self.need_real_grad:
-                    real_g = grad_of(real_nlls[idx:idx + 1], student.parameters())
+                    real_g = grad_of(
+                        real_nlls[idx:idx + 1], student.parameters())
                 if self.need_fake_grad:
-                    fake_g = grad_of(fake_nlls[idx:idx + 1], student.parameters())
+                    fake_g = grad_of(
+                        fake_nlls[idx:idx + 1], student.parameters())
                 if self.need_contrast_grad:
-                    contrast_g = grad_of(contrast_nlls[idx:idx + 1], student.parameters())
+                    contrast_g = grad_of(
+                        contrast_nlls[idx:idx + 1], student.parameters())
                     contrast_g = [cg.detach() for cg in contrast_g]
-                aligned_grads.append((real_g, fake_g, contrast_g, slice(idx, idx+1)))
+                aligned_grads.append(
+                    (real_g, fake_g, contrast_g, slice(idx, idx+1)))
         return aligned_grads
 
     def _do_gan(self, real_output, fake_output, target):
@@ -1046,7 +1013,8 @@ class GenerativeProfessor(Professor):
 
         if self.permute_before_discriminator:
             with torch.no_grad():
-                perm = torch.randperm(self.nclasses).long().to(real_output.device)
+                perm = torch.randperm(self.nclasses).long().to(
+                    real_output.device)
                 perm_real = real_output.index_select(1, perm)
                 perm_fake = fake_output.index_select(1, perm)
         else:
@@ -1192,12 +1160,12 @@ class GenerativeProfessor(Professor):
         nclasses = self.nclasses
         eval_samples = self.eval_samples
         if old_model is None:
-            if self.args.generator.name=='MemGenerator':
+            if self.args.generator.name == 'MemGenerator':
                 new_generator = get_model(generative,
-                                       args.generator,
-                                       ds_size = self.ds_size,
-                                       in_size=self.in_size,
-                                       nclasses=self.nclasses)
+                                          args.generator,
+                                          ds_size=self.ds_size,
+                                          in_size=self.in_size,
+                                          nclasses=self.nclasses)
             else:
                 new_generator = get_model(generative,
                                           args.generator,
@@ -1207,13 +1175,13 @@ class GenerativeProfessor(Professor):
                                           nperf=args.nperf)
             new_generator.to(self.crt_device)
             new_generator.load_state_dict(self.generator.state_dict())
-            if self.args.generator.name=='MemGenerator':
+            if self.args.generator.name == 'MemGenerator':
                 new_generator.part = self.generator.part
             return PostTrainGenerativeProfessor(new_generator, nclasses,
-                                                eval_samples,self.args)
+                                                eval_samples, self.args)
         assert isinstance(old_model, PostTrainGenerativeProfessor)
         old_model.generator.load_state_dict(self.generator.state_dict())
-        if self.args.generator.name=='MemGenerator':
+        if self.args.generator.name == 'MemGenerator':
             old_model.generator.part = self.generator.part
         old_model.last_perf = 100 / nclasses
         return old_model
@@ -1227,7 +1195,7 @@ class PostTrainGenerativeProfessor(PostTrainProfessor):
         self.nclasses = nclasses
         self.eval_samples = eval_samples
         self.last_perf = 100 / nclasses
-        self.args=args
+        self.args = args
 
     def eval_student(self, student: Student,
                      step: int,
@@ -1242,7 +1210,8 @@ class PostTrainGenerativeProfessor(PostTrainProfessor):
             if self.args.generator.name == 'MemGenerator':
                 data, target = self.generator(nsamples=nsamples)
             else:
-                data, target = self.generator(nsamples=nsamples, perf=last_perf)
+                data, target = self.generator(
+                    nsamples=nsamples, perf=last_perf)
 
         output = student(data)
 

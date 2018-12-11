@@ -1,0 +1,106 @@
+debug: no
+no_cuda: no
+tensorboard: yes
+
+
+dataset: FashionMNIST
+dataset_limit: 0
+batch_size: 128
+test_batch_size: 10000
+in_size: [1, 32, 32]
+
+random_params: yes
+
+c_l2: 0
+nepochs: 8
+
+evaluation:
+  freq: 24000
+  nstudents: 3
+  teaching_steps: 2000
+  eval_freq: 25
+  async: yes
+  continuous: yes
+  last_k: 25
+
+student:
+  name: ConvNet
+  channels: [32, 32]
+  units: [100]
+  use_bias: no
+  use_dropout: yes
+  use_batch_norm: no
+
+student_optimizer:
+  name: Adam
+  lr: 0.001
+
+professor:
+  name: GenerativeProfessor
+  nstudents: 18
+  random_students: no
+  trained_on_fake: 12
+
+  students_per_batch: 2
+
+
+  nz: 32
+  nperf: 16
+
+  generator:
+    name: SkipGenerator
+    ngf: 16
+
+  encoder:
+    name: LinearEncoder
+    nef: 8
+
+  discriminator:
+    name: OutputDiscriminator
+
+  label_to_discriminator: yes
+  permute_before_discriminator: yes
+
+  siamese:
+    name: ConvNet
+    channels: [32, 32]
+    units: [64]
+    use_bias: yes
+    use_dropout: yes
+    use_batch_norm: no
+
+  siamese_detach_other: yes
+  contrast_from_real_data: yes
+  ctrl_loss: yes
+  siamese_margin: 1.0
+
+  optimizer:
+    name: Adam
+    lr: .001
+
+  c_nll: 0
+  c_kl: 1
+  c_contrast_kl: 0
+  c_adv: 0
+  c_siamese: 0
+  c_grad_mse: 0
+  c_grad_cos: 0
+  c_next_nll: 0
+  c_contrast_next_nll: 0
+  c_next_nll2: 0
+  c_next_kl: 0
+  c_hess: 0
+  c_d: 0
+  c_recon: 0
+  c_latent_kl: 1
+  next_lr: .001
+  target_dropout: 0
+
+  grad_type: example
+  grad_samples: 128
+
+  eval_samples: 128
+
+  student_reset: everystep
+
+  report_freq: 16384

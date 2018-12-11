@@ -107,3 +107,8 @@ def get_kwargs(args: Union[Namespace, dict],
         raise ValueError("Expected Namespace or dict")
 
     return kwargs
+
+
+def best_and_last(values, wlen) -> Tuple[float, float]:
+    avgs = np.convolve(values, np.ones((wlen,)) / wlen)[(wlen - 1):(1 - wlen)]
+    return avgs.max(), avgs[-1]

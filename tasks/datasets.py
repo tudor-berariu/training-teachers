@@ -131,7 +131,7 @@ def get_loaders(dataset: str,
         testset = trainset
         nrmlz = None
 
-    __batch_size = min(limit, len(trainset))
+    __batch_size = min(limit, len(trainset)) if limit > 0 else len(trainset)
     train_loader = DataLoader(trainset, batch_size=__batch_size)
 
     if dataset != 'random':
