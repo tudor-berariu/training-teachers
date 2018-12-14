@@ -1,16 +1,17 @@
-import os
-import pickle
-from copy import deepcopy
 from argparse import Namespace
 import concurrent.futures
-from termcolor import colored as clr
+from copy import deepcopy
+import os
+import pickle
+from typing import List
 import numpy as np
-
+from termcolor import colored as clr
 import torch
 import torch.nn.functional as F
 
-from utils import printer, args_to_dict
+from utils import printer
 from utils import get_optimizer, print_conf
+from utils import best_and_last
 from loss_utils import l2
 import professors
 from models import get_model
@@ -31,12 +32,11 @@ def test(model, loader, device, verbose: int = 1):
     nclasses = model.nclasses  # Our classifiers provide this info
     conf_matrix = torch.zeros(nclasses, nclasses, device=device)
     loss, correct = .0, 0
-
     model.eval()
     with torch.no_grad():
         for data, target, data_idx in loader:
-            data, target, data_idx = data.to(device), target.to(device), \
-                                        data_idx.to(device)
+            data, target = data.to(device), target.to(device)
+            data_idx = data_idx.to(device)
             output = model(data)
             loss += F.cross_entropy(output, target, reduction="sum").item()
             _, prediction = output.max(1)
@@ -60,11 +60,24 @@ def test(model, loader, device, verbose: int = 1):
 # Test a given professor by optimizing a few students on synthetic
 # data starting from random parameters.
 
-def test_professor(agent, loader, device, args, state_dict=None,
+def test_professor(professor, loader, device, args, state_dict=None,
                    verbose: int = 1):
-    all_accs = []
+    scores = {}  # type: Dict[str, float]
+    for teaching_mode in professor.teaching_modes():
+        professor.teaching_mode = teaching_mode
+        scores[teaching_mode] = _test_professor(professor,
+                                                loader, device, args,
+                                                state_dict=state_dict,
+                                                verbose=verbose)
+    return scores
+
+
+def _test_professor(professor, loader, device, args, state_dict=None,
+                    verbose: int = 1):
+    all_accs = []  # type: List[float]
     nstudents = args.evaluation.nstudents
     nsteps = args.evaluation.teaching_steps
+    lastk = args.evaluation.last_k
     info = printer("TEACH", 1, verbose=verbose)
     conf = None
 
@@ -79,45 +92,65 @@ def test_professor(agent, loader, device, args, state_dict=None,
         crt_accs = []
         for step in range(nsteps):
             student_optimizer.zero_grad()
-            synthetic_loss, synthetic_acc = agent.eval_student(student, step)
+            syn_loss, syn_acc = professor.eval_student(student, step)
             if args.c_l2 > 0:
                 l2_loss = l2(student.parameters()) * args.c_l2
-                full_loss = synthetic_loss + l2_loss
+                full_loss = syn_loss + l2_loss
             else:
                 l2_loss = None
-                full_loss = synthetic_loss
+                full_loss = syn_loss
             full_loss.backward()
             student_optimizer.step()
             if (step + 1) % args.evaluation.eval_freq == 0:
                 acc, loss, conf = test(student, loader, device, verbose=False)
                 student.train()
                 crt_accs.append(acc)
-                info("Syn. NLL:", f"{synthetic_loss.item():.3f};",
-                     "Syn. Acc:", f"{synthetic_acc:.2f}%;",
+                info("Syn. Loss:", f"{syn_loss.item():.5f};",
+                     "Syn. Acc:", f"{syn_acc:.2f}%;",
                      "" if l2_loss is None else f"L2: {l2_loss.item():.3f};",
-                     clr(f"Real NLL: {loss:.3f}", "yellow") + ";",
+                     clr(f"Real NLL: {loss:.4f}", "yellow") + ";",
                      clr(f"Real Acc: {acc:.1f}%", "yellow"),
                      tags=[f"Student {sidx:d}/{nstudents:d}",
                            f"{step + 1: 4d}/{nsteps:d}"])
         print_conf(conf, print_func=info)
-        if len(all_accs) > 25:
-            crt_accs = crt_accs[-25:]  # Keep the last scores only
+        if len(all_accs) > lastk:
+            crt_accs = crt_accs[-lastk:]  # Keep the last scores only
         all_accs.append(np.mean(crt_accs))
     final_score = np.mean(all_accs)
     info(clr(f" >>> Final score = {final_score:.3f} <<<", "yellow"))
     return final_score
 
 
+def log_new_scores(seen_at, new_scores, scores, scores_at,
+                   print_func, writer=None) -> None:
+    msgs = []
+    for teaching_mode, score in new_scores.items():
+        scores.setdefault(teaching_mode, []).append(score)
+        if writer is not None:
+            writer.add_scalar(f'teach/{teaching_mode:s}', score, seen_at)
+        msgs.append(f"{teaching_mode:s} = " +
+                    clr(f"{score:.3f}%", "white", "on_magenta"))
+    scores_at.append(seen_at)
+
+    print_func("Ended evaluation at", seen_at, "steps with",
+               "; ".join(msgs), tags=["TEACH"])
+
 # -----------------------------------------------------------------------------
 #
 # The main script to be run on any agent.
 
+
 def run(args: Namespace):
 
-    if args.wandb:
-        import wandb
-        wandb.init()
-        wandb.config.update(args_to_dict(args))
+    if args.tensorboard:
+        from tensorboardX import SummaryWriter
+        # TODO: is there a better way to get rid of old files?
+        to_delete = [f for f in os.listdir() if "tfevents" in f]
+        for tfevent_file in to_delete:
+            os.remove(tfevent_file)
+        writer = SummaryWriter(log_dir=args.out_dir)
+    else:
+        writer = None
 
     verbose = int(args.verbose) if hasattr(args, "verbose") else 1
     info = printer("MAIN", 1, verbose=verbose)
@@ -181,15 +214,14 @@ def run(args: Namespace):
     prof_args.in_size = in_size
     prof_args.nclasses = nclasses
     prof_args.nrmlz = nrmlz
-    prof_args.wandb = args.wandb
+    prof_args.writer = writer
     prof_args.student = args.student
     prof_args.student_optimizer = args.student_optimizer
 
-    # TODO: Other professors
     Professor = getattr(professors, prof_args.name)
     if args.professor.generator.name == 'MemGenerator':
         professor = Professor(prof_args, device, start_params=start_params,
-                                ds_size = train_loader.ds_size)
+                              ds_size=train_loader.ds_size)
     else:
         professor = Professor(prof_args, device, start_params=start_params)
 
@@ -199,11 +231,11 @@ def run(args: Namespace):
 
     seen_examples = 0
     last_professor_eval = 0
-    best_fitness, best_idx, scores, scores_at = None, None, [], []
+    scores, scores_at = {}, []
     found_nan, should_stop = False, False
 
     eval_professor = None
-    async_result = None
+    async_result = None  # type: Optional[tuple]
 
     if args.evaluation.continuous and not args.evaluation.async:
         raise ValueError("Continuous eval is available in async mode only.")
@@ -213,44 +245,44 @@ def run(args: Namespace):
     for epoch in range(1, args.nepochs + 1):
         for _batch_idx, (data, target, data_idx) in enumerate(train_loader):
             data, target, data_idx = data.to(device), target.to(device),\
-                                        data_idx.to(device)
+                data_idx.to(device)
             found_nan = professor.process(data, target, data_idx)
             seen_examples += len(data)
 
-            if found_nan is None:
+            if found_nan:
                 info("Found NaN. Exiting.")
                 found_nan = should_stop = True
                 break
 
-            new_score = False
-            eval_professor = professor.post_train_professor()
-            if async_result is not None:
-                seen_at, result = async_result
-                if result.done():
-                    score = result.result()
-                    scores.append(score)
-                    scores_at.append(seen_at)
-                    if args.wandb:
-                        wandb.log({"Step": seen_at, "score": score})
-                    async_result = None
-                    new_score = True
-                    info("Ended evaluation at", seen_at, "steps with",
-                         clr(f"{score:.3f}%", "white", "on_magenta"),
-                         tags=["TEACH"])
+            # -----------------------------------------------------------------
+            # --- All above is just evaluation handling
 
             if async_result is not None:
+                # -- The asynchronous evaluation ended.
+                seen_at, result = async_result
+                if result.done():
+                    new_scores = result.result()  # type: Dict[str, float]
+                    log_new_scores(seen_at, new_scores, scores, scores_at,
+                                   info, writer)
+                    async_result = None
+
+            if async_result is not None:
+                # -- It means there's an async evaluation currently running.
                 pass
             elif args.evaluation.continuous:
+                # -- It means we should start evaluating the model.
                 info("Started evaluation at", seen_examples, "steps",
                      tags=["TEACH"])
                 eval_professor = professor.post_train_professor(
                     old_model=eval_professor)
                 result = executor.submit(test_professor,
-                                         eval_professor, test_loader, device, args,
+                                         eval_professor, test_loader, device,
+                                         args,
                                          state_dict=start_params,
                                          verbose=0)
                 async_result = (seen_examples, result)
             elif seen_examples - last_professor_eval >= args.evaluation.freq:
+                # -- It means we should start evaluating the model.
                 info("Started evaluation at", seen_examples, "steps",
                      tags=["TEACH"])
                 if args.evaluation.async:
@@ -262,31 +294,22 @@ def run(args: Namespace):
                                              verbose=0)
                     async_result = (seen_examples, result)
                 else:
-                    score = test_professor(eval_professor, test_loader, device,
-                                           args, state_dict=start_params)
-                    scores.append(score)
-                    scores_at.append(seen_examples)
-                    if args.wandb:
-                        wandb.log({"Step": seen_at, "score": score})
-                    info("Evaluation at", seen_examples, "steps ended with",
-                         clr(f"{score:.3f}%", "white", "on_magenta"),
-                         tags=["TEACH"])
+                    eval_professor = professor.post_train_professor(
+                        old_model=eval_professor)
+                    new_scores = test_professor(eval_professor, test_loader,
+                                                device,
+                                                args, state_dict=start_params)
+
+                    log_new_scores(seen_examples, new_scores, scores, scores_at,
+                                   info, writer)
                 last_professor_eval += args.evaluation.freq
 
-            if new_score and len(scores) >= 10:
-                new_avg = np.mean(scores[-10:])
-                if best_fitness is None or new_avg > best_fitness:
-                    best_fitness, best_idx = new_avg, len(scores)
-
-                if best_idx + 100 <= len(scores):
-                    info("Early stopping: 100 evaluations, no improvement")
-                    should_stop = True
-                    break
+            # -----------------------------------------------------------------
 
         if should_stop:
             break
-        professor.end_epoch()
 
+        professor.end_epoch()
         professor.save_state(args.out_dir, epoch, **some_batch)
         with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
             pickle.dump({"scores": scores, "seen": scores_at},
@@ -298,63 +321,38 @@ def run(args: Namespace):
         executor.shutdown()  # It waits for any async evaluation to end
         if async_result is not None:
             seen_at, result = async_result
-            score = result.result()
-            scores.append(score)
-            scores_at.append(seen_at)
-            if args.wandb:
-                wandb.log({"step": seen_at, "score": score})
-            if len(scores) >= 10:
-                new_avg = np.mean(scores[-10:])
-                if best_fitness is None or new_avg > best_fitness:
-                    best_fitness = new_avg
-            info("Evaluation at", seen_at, "steps",
-                 clr(f"{score:.3f}%", "white", "on_magenta"),
-                 tags=["TEACH"])
+            new_scores = result.result()
+            log_new_scores(seen_at, new_scores, scores, scores_at,
+                           info, writer)
             with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
                 pickle.dump({"scores": scores, "seen": scores_at},
                             handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    if found_nan:
-        fitness = -1.0
-    elif best_fitness is None:
-        fitness = np.mean(scores)
-    else:
-        fitness = best_fitness
-
-    summary = {
-        "best": fitness,
-        "last-5": np.mean(scores[-5:]),
-    }
+    summary = {}
+    for attr, values in scores.items():
+        best, last = best_and_last(values, 5)
+        summary[f"{attr:s}:best"] = best
+        summary[f"{attr:s}:last"] = last
 
     with open(os.path.join(args.out_dir, 'summary.pkl'), 'wb') as handler:
         pickle.dump(summary, handler, pickle.HIGHEST_PROTOCOL)
 
-    info(f"Final fitness: {fitness:.3f}")
+    if args.tensorboard:
+        writer.export_scalars_to_json(os.path.join(args.out_dir, "trace.json"))
+        writer.close()
 
-    with open(os.path.join(args.out_dir, "fitness"), "w") as handler:
-        handler.write(f"{fitness:f}\n")
-
-    if args.wandb:
-        wandb.run.summary["fitness"] = fitness
-
-    return fitness
+    info(f"Final fitness: {best:.3f}")
 
 
 # -- The usual main function to be used with liftoff
 
 def main() -> None:
     # Reading args
-    from time import time
     from liftoff.config import read_config
-
     args = read_config()  # type: Namespace
 
     if not hasattr(args, "out_dir"):
-        if not os.path.isdir('./results'):
-            os.mkdir('./results')
-        out_dir = f'./results/{str(int(time())):s}_{args.experiment:s}'
-        os.mkdir(out_dir)
-        args.out_dir = out_dir
+        raise Exception(f"Out directory was not provided.")
     elif not os.path.isdir(args.out_dir):
         raise Exception(f"Directory {args.out_dir} does not exist.")
 
