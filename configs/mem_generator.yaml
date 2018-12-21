@@ -6,8 +6,8 @@ script: simple_train.py
 
 dataset: FashionMNIST
 dataset_limit: 100
-batch_size: 50
-test_batch_size: 50
+batch_size: 100
+test_batch_size: 100
 in_size: [1, 32, 32]
 
 random_params: yes
@@ -16,10 +16,10 @@ c_l2: 0
 nepochs: 3000
 
 evaluation:
-  freq: 40000
+  freq: 50000
   nstudents: 2
-  teaching_steps: 501
-  eval_freq: 501
+  teaching_steps: 200
+  eval_freq: 100
   async: no
   continuous: no
 
@@ -33,22 +33,27 @@ student:
 
 student_optimizer:
   name: Adam
-  lr: 0.001
+  lr: 0.01
 
 professor:
   name: GenerativeProfessor
-  nstudents: 50
+  nstudents: 1
   random_students: no
-  trained_on_fake: 50
+  trained_on_fake: 1
 
-  students_per_batch: 10
+  students_per_batch: 1
 
 
   nz: 32
   nperf: 16
 
   generator:
-    name: MemGenerator
+    name: ConvGenerator
+    ngf: 16
+
+  encoder:
+    name: ConvEncoder
+    nef: 16
 
   label_to_discriminator: yes
   permute_before_discriminator: yes
@@ -88,4 +93,4 @@ professor:
 
   student_reset: everystep
 
-  report_freq: 400
+  report_freq: 10000

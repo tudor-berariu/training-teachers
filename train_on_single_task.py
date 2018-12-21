@@ -145,7 +145,7 @@ def run(args: Namespace):
     train_loader.to(device)
     test_loader.to(device)
 
-    some_batch = train_loader.sample(nsamples=32)
+    some_batch, some_batch_idx = train_loader.sample(nsamples=32)
 
     in_size, nclasses, nrmlz = data_info
     args.in_size = in_size
@@ -287,7 +287,8 @@ def run(args: Namespace):
             break
         professor.end_epoch()
 
-        professor.save_state(args.out_dir, epoch, **some_batch)
+        professor.save_state(args.out_dir, epoch, 
+                                data_idx=some_batch_idx, **some_batch)
         with open(os.path.join(args.out_dir, f"eval.th"), 'wb') as handle:
             pickle.dump({"scores": scores, "seen": scores_at},
                         handle, protocol=pickle.HIGHEST_PROTOCOL)

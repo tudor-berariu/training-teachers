@@ -341,7 +341,7 @@ class GenerativeProfessor(Professor):
             mean, log_var = (None, None) if encoder is None else encoder(data)
 
             if self.args.generator.name=='MemGenerator':
-                fake_data, _target = generator(target, idx=data_idx)
+                fake_data, _target = generator(idx=data_idx)
             else:
                 fake_data, _target = generator(target, mean=mean, log_var=log_var,
                                                perf=torch.linspace(10, 90, len(data)))

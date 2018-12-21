@@ -91,10 +91,7 @@ class MemGenerator(nn.Module):
                 if idx[i] not in self.part[t]:
                     self.part[t].append(idx[i])
 
-        idx_ = torch.zeros([len(idx),self.ds_size])
-        idx_[torch.arange(0,len(idx),dtype=torch.long),idx] = 1
-        idx_ = idx_.to(self.device)
-        return torch.reshape(idx_ @ self.mem, [-1,*self.in_size]), target
+        return torch.reshape(self.mem[idx], [-1,*self.in_size]), target
 
 
 

@@ -92,7 +92,7 @@ class InMemoryDataLoader(Iterator):
     idxs = torch.randint(self.length, (nsamples,),
                dtype=torch.long, device=self.data.device)
     return {"data": self.data.index_select(0, idxs),
-        "target": self.target.index_select(0, idxs)}
+        "target": self.target.index_select(0, idxs)},idxs
 
 
 def get_padding(in_size: Size, out_size: Size) -> Padding:
