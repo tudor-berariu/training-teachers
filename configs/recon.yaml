@@ -12,13 +12,13 @@ conv:
   layers: [[5,5,8],[3,3,16],[256]]
 activation: 'relu'
 verbose: 1
-reset_freq: 1
-objective: 'kl'
+reset_freq: 2
+objective: 'grad_cos'
 align_grad: 0
 batch_size: 25
 optim: 'adam'
 lr: 0.01
-train_proj: 0
+train_proj: 5
 test_steps: 50
 real_divergence: 0.1
 

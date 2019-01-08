@@ -5,7 +5,7 @@ data_batch: 100
 in_size: [1000]
 out_size: 10
 n_proj: 10
-epochs: 6000
+epochs: 10000
 lin:
   layers: [256]
 conv:
@@ -20,4 +20,4 @@ optim: 'adam'
 lr: 0.01
 train_proj: 100
 test_steps: 1000
-real_divergence: 0.1
+real_divergence: 0

@@ -1,4 +1,3 @@
-objective: ['grad_cos','grad_mse','kl','mse']
-reset_freq: [50,200,600]
-train_proj: [0,100]
-real_divergence: [0,0.01,0.1,1]
+objective: ['grad_cos','grad_mse','task_mse']
+reset_freq: [50,600]
+train_proj: [0,50,100]
