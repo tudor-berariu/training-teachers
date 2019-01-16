@@ -11,7 +11,7 @@ def covariance(x):
   mean = tf.reduce_mean(x,axis=0)
   x = x-mean
   var = tf.reduce_mean(tf.square(x),axis=0)
-  return tf.transpose(x)@x/(var*100)
+  return tf.transpose(x)@x/(var*1000)
 
 
 def save_img(data1, data2, path, n=100):
@@ -96,7 +96,7 @@ class ConvProj(object):
         else:
           if len(layer)!=3 and first:
             first=False
-            in_size = 7*7*32
+            in_size = 28*28*self.layers[i-1][-1]//(4**i)
           self.w.append(tf.get_variable(f'w_{i}',[in_size,layer[-1]],
                         initializer=xavier_initializer()))
         self.b.append(tf.get_variable(f'b_{i}', [1,layer[-1]],
@@ -116,7 +116,8 @@ class ConvProj(object):
             x = tf.layers.flatten(x)
           x = tf.matmul(x,w)+b
         if i != len(self.w)-1:
-          x = tf.layers.dropout(x, self.dropout, training=training)
+          if self.dropout>0:
+            x = tf.layers.dropout(x, self.dropout, training=training)
           if self.args.activation == 'tanh':
             x = tf.tanh(x)
           elif self.args.activation == 'relu':

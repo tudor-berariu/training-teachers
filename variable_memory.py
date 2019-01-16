@@ -17,9 +17,12 @@ def get_dataset(args):
                 (test_data[:,:,:,np.newaxis],test_labels)
 
 
-def create_session():
+def create_session(args):
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
+    if args.use_gpu==1:
+        config.gpu_options.allow_growth = True
+    else:
+        config = tf.ConfigProto(device_count = {'GPU':0})
     return tf.Session(config=config)
 
 
@@ -38,7 +41,7 @@ def create_students(args):
 def run(args):
     if args.out_dir is None:
         args.out_dir = './junk/'
-    s = create_session()
+    s = create_session(args)
     logs_writer = tf.summary.FileWriter(args.out_dir, s.graph)
     (train_data, train_labels), (test_data, test_labels) = get_dataset(args)
     fake_data = tf.get_variable('fake_data', 
@@ -78,8 +81,9 @@ def run(args):
         fake_loss = kl(batch_fake_labels, tf.nn.softmax(fake_output))
         test_loss = kl(batch_test_labels_onehot, 
                         tf.nn.softmax(test_output))
-        test_conf += tf.confussion_matrix(batch_test_labels_onehot,
-                                            test_output)/args.n_proj
+        test_conf += tf.confusion_matrix(batch_test_labels_,
+                                        tf.argmax(test_output,-1),
+                                        num_classes=10)/args.n_proj
         real_loss = tf.reduce_mean(real_loss)
         fake_loss = tf.reduce_mean(fake_loss)
         test_loss = tf.reduce_mean(test_loss)
@@ -90,6 +94,7 @@ def run(args):
 
         real_acc+=tf_utils.acc(real_output, batch_labels_onehot)/args.n_proj
         fake_acc+=tf_utils.acc(fake_output, batch_fake_labels)/args.n_proj
+        test_acc+=tf_utils.acc(test_output, batch_test_labels_onehot)/args.n_proj
 
         real_grad = tf.gradients(real_loss, student.vars)
         real_grad = [tf.reshape(v,[-1]) for v in real_grad]
@@ -124,7 +129,6 @@ def run(args):
     for epoch in range(args.epochs):
         perm = permutation(len(train_data))
         no_iters = len(train_data)//args.batch_size
-        # no_iters=1
         for it in range(no_iters):
             batch_indices = perm[it*args.batch_size:(it+1)*args.batch_size]
             batch_data = train_data[batch_indices]
@@ -165,31 +169,36 @@ def run(args):
 
     logs = tf.summary.merge([
                         tf.summary.scalar('test_memory_fake_acc', fake_acc),
-                        tf.summary.scalar('test_memory_real_acc', real_acc),
+                        tf.summary.scalar('test_memory_real_acc', test_acc),
                         tf.summary.scalar('test_memory_real_loss',
-                                            total_real_loss),
+                                            total_test_loss),
                         tf.summary.scalar('test_memory_fake_loss',
                                             total_fake_loss)])
 
     s.run([reset_students,reset_train_optim])
     test_steps=max((args.test_epochs*args.memory_size//args.batch_size)+1,600)
-    # test_steps=1
     for step in range(test_steps):
         if args.batch_size>args.memory_size:
             memory_indices = list(range(args.memory_size))
         else:
             memory_indices = np.random.choice(args.memory_size,args.batch_size,
                                             replace=False)
-        # batch_indices = permutation(len(test_data))[:args.batch_size]
-        batch_data=test_data
-        batch_labels=test_labels
-        _, logs_ = s.run([test_optim_step, logs],
-                            feed_dict={batch_data_: batch_data,
-                                        batch_labels_: batch_labels,
+        batch_indices = np.random.choice(len(test_data),args.batch_size,
+                                        replace=False)
+        batch_data=test_data[batch_indices]
+        batch_labels=test_labels[batch_indices]
+        _, logs_,test_conf_ = s.run([test_optim_step, logs,test_conf],
+                            feed_dict={batch_test_data_: batch_data,
+                                        batch_test_labels_: batch_labels,
                                         memory_indices_:memory_indices,
                                         training_real: False})
         logs_writer.add_summary(logs_,step)
-
+        test_conf_ /= np.sum(test_conf_,axis=1)
+        with open(os.path.join(args.out_dir,f'conf_{step}.txt'),'w') as f:
+            print(np.array_str(test_conf_,
+                            max_line_width=10000,
+                            precision=3),
+                            file=f)
     logs = tf.summary.merge([
                         tf.summary.scalar('test_fake_acc', fake_acc),
                         tf.summary.scalar('test_train_acc', real_acc),
@@ -203,7 +212,7 @@ def run(args):
     s.run([reset_students,reset_train_optim])
     perm = permutation(args.memory_size)
     for step in range(test_steps):
-        if batch_size>args.memory_size:
+        if args.batch_size>args.memory_size:
             batch_indices = list(range(args.memory_size))
         else:
             batch_indices = np.random.choice(args.memory_size,args.batch_size,
@@ -216,27 +225,26 @@ def run(args):
         else:
             memory_indices = np.random.choice(args.memory_size,args.batch_size,
                                             replace=False)
-        _, logs_, test_conf_ = s.run([train_optim_step,logs,test_conf],
+
+        batch_test_indices = np.random.choice(len(test_data),args.batch_size,
+                                                replace=False)
+        batch_test_data = test_data[batch_test_indices]
+        batch_test_labels = test_labels[batch_test_indices]
+        _, logs_ = s.run([train_optim_step,logs],
                     feed_dict={batch_data_:batch_data,
                                 batch_labels_:batch_labels,
                                 memory_indices_: memory_indices,
                                 training_fake: False,
-                                batch_test_data_: test_data,
-                                batch_test_labels_: test_labels})
+                                batch_test_data_: batch_test_data,
+                                batch_test_labels_: batch_test_labels})
         logs_writer.add_summary(logs_,step)
-        with open(os.path.join(args.out_dir,f'conf_{step}.txt')) as f:
-            print(np.array_str(test_conf_,max_line_with=10000,precision=3),
-                file=f)
 
 
     fake_data_, fake_labels_,cov_ = s.run([fake_data, 
                                     tf.nn.softmax(fake_labels),
                                     covariance(fake_labels)])
-    for line in cov_:
-        s = ''
-        for val in line:
-            s+=f' {val:.4f}'
-        print(line)
+    np.set_printoptions(linewidth=10000,suppress=True,precision=4)
+    print(cov_)
     print(fake_labels_[:30])
     tf_utils.simple_img(fake_data_,os.path.join(args.out_dir,'memory.png'),30)
             
