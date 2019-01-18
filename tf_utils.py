@@ -7,24 +7,36 @@ import scipy as sp
 
 
 
+def rnd_ind(collection, size):
+  try:
+    collection=len(collection)
+  except:
+    pass
+  if size>=collection:
+    return list(range(collection))
+  else:
+    return np.random.choice(collection,size,replace=False)
+
 def covariance(x):
   mean = tf.reduce_mean(x,axis=0)
   x = x-mean
   var = tf.reduce_mean(tf.square(x),axis=0)
-  return tf.transpose(x)@x/(var*1000)
+  return tf.transpose(x)@x/(var*int(x.shape[0]))
+
+
+def row_img(data):
+  return np.squeeze(np.concatenate(np.split(data,len(data)),axis=2),0)
 
 
 def save_img(data1, data2, path, n=100):
-  if len(data1.shape)==2:
-    l = int(np.sqrt(int(data1.shape[1])))
-    data1 = np.reshape(data1, (-1,l,l,1))
-    data2 = np.reshape(data2, (-1,l,l,1))
-  else:
-    data1=np.squeeze(data1,-1)
-    data2=np.squeeze(data2,-1)
-    l=int(data1.shape[1])
-  data = np.concatenate((data1,data2),axis=-1)
-  data = np.reshape(data[:n], [-1,2*l])
+  n=min(len(data1),len(data2),n)
+  data1 = data1[:n]
+  data2 = data2[:n]
+  data1 = row_img(data1)
+  data2 = row_img(data2)
+  data = np.concatenate((data1,data2),axis=0)
+  if int(data.shape[-1])==1:
+    data = np.squeeze(data,-1)
   sp.misc.toimage(data, cmin=0,cmax=1).save(path)
 
 def kl(f, g, axis=-1):
@@ -76,12 +88,12 @@ class LinProj(object):
 
 class ConvProj(object):
 
-  def __init__(self,name, args):
+  def __init__(self,name, args,shape):
     self.name=name
     self.w = []
     self.b = []
     self.args = args
-    in_size=1
+    in_size=shape[-1]
     self.layers = []
     self.layers.extend(args.conv.layers)
     self.layers.append([args.out_size])
@@ -96,7 +108,7 @@ class ConvProj(object):
         else:
           if len(layer)!=3 and first:
             first=False
-            in_size = 28*28*self.layers[i-1][-1]//(4**i)
+            in_size = shape[1]*shape[2]*self.layers[i-1][-1]//(4**i)
           self.w.append(tf.get_variable(f'w_{i}',[in_size,layer[-1]],
                         initializer=xavier_initializer()))
         self.b.append(tf.get_variable(f'b_{i}', [1,layer[-1]],

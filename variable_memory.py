@@ -1,7 +1,7 @@
 from liftoff.config import read_config
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.datasets import fashion_mnist
+from tensorflow.keras.datasets import fashion_mnist,mnist,cifar10
 from numpy.random import permutation
 from tf_utils import ConvProj, kl, cosine, save_img, covariance
 import tf_utils
@@ -13,8 +13,22 @@ def get_dataset(args):
             fashion_mnist.load_data()
         train_data = train_data.astype(np.float32)/255
         test_data = test_data.astype(np.float32)/255
-        return (train_data[:,:,:,np.newaxis], train_labels), \
-                (test_data[:,:,:,np.newaxis],test_labels)
+        return (train_data[:,:,:,np.newaxis], train_labels[:,np.newaxis]), \
+                (test_data[:,:,:,np.newaxis],test_labels[:,np.newaxis])
+    elif args.dataset == 'mnist':
+        (train_data, train_labels), (test_data,test_labels) = \
+            mnist.load_data()
+        train_data = train_data.astype(np.float32)/255
+        test_data = test_data.astype(np.float32)/255
+        return (train_data[:,:,:,np.newaxis], train_labels[:,np.newaxis]), \
+                (test_data[:,:,:,np.newaxis],test_labels[:,np.newaxis])
+    elif args.dataset == 'cifar10':
+        (train_data, train_labels), (test_data,test_labels) = \
+            cifar10.load_data()
+        train_data = train_data.astype(np.float32)/255
+        test_data = test_data.astype(np.float32)/255
+        return (train_data, train_labels), \
+                (test_data,test_labels)
 
 
 def create_session(args):
@@ -26,16 +40,19 @@ def create_session(args):
     return tf.Session(config=config)
 
 
-def create_students(args):
+def create_students(args,shape):
     students = []
     students_params = []
     for i in range(args.n_proj):
-        students.append(ConvProj(f'student_{i}',args))
+        students.append(ConvProj(f'student_{i}',args,shape))
         students_params.extend(students[-1].vars)
     return students, students_params
 
 
 
+def pfile(content,f,args):
+    with open(os.path.join(args.out_dir,f),'w') as stream:
+        print(content,file=stream)
 
 
 def run(args):
@@ -50,18 +67,20 @@ def run(args):
     fake_labels = tf.get_variable('fake_labels',
                             [args.memory_size, 10],
                             initializer = tf.initializers.random_normal())
-    students, students_params = create_students(args)
+    train_shape = [None]
+    train_shape.extend([int(x) for x in train_data.shape[1:]])
+    students, students_params = create_students(args, train_shape)
 
     full_real_grad = []
     full_fake_grad = []
     training_fake = tf.placeholder_with_default(True,None)
     training_real = tf.placeholder_with_default(True,None)
-    batch_data_ = tf.placeholder(tf.float32, [None,28,28,1],
+    batch_data_ = tf.placeholder(tf.float32, train_shape,
                                 'data_placeholder')
-    batch_test_data_ = tf.placeholder(tf.float32,[None,28,28,1])
-    batch_labels_ = tf.placeholder(tf.int32,[None],'labels_placeholder')
+    batch_test_data_ = tf.placeholder(tf.float32,train_shape)
+    batch_labels_ = tf.placeholder(tf.int32,[None,1],'labels_placeholder')
     batch_labels_onehot = tf.one_hot(batch_labels_, 10, dtype=tf.float32)
-    batch_test_labels_ = tf.placeholder(tf.int32,[None])
+    batch_test_labels_ = tf.placeholder(tf.int32,[None,1])
     batch_test_labels_onehot = tf.one_hot(batch_test_labels_,
                                         10,dtype=tf.float32)
     memory_indices_ = tf.placeholder(tf.int32,[None],'indices_placeholder')
@@ -129,14 +148,14 @@ def run(args):
     for epoch in range(args.epochs):
         perm = permutation(len(train_data))
         no_iters = len(train_data)//args.batch_size
+        no_iters=1
         for it in range(no_iters):
             batch_indices = perm[it*args.batch_size:(it+1)*args.batch_size]
             batch_data = train_data[batch_indices]
             batch_labels = train_labels[batch_indices]
             if args.full_memory == 0 and args.batch_size<args.memory_size:
-                memory_indices = np.random.choice(args.memory_size,
-                                                    args.batch_size,
-                                                    replace=False)
+                memory_indices = tf_utils.rnd_ind(args.memory_size,
+                                                    args.batch_size)
             else:
                 memory_indices = list(range(args.memory_size))
             _,objective_,logs_ = s.run([prof_optim_step,objective,logs],
@@ -154,9 +173,7 @@ def run(args):
                 train_steps = 0
                 while train_steps<600:
                     train_steps+=1
-                    batch_indices = np.random.choice(len(train_data),
-                                                    args.batch_size,
-                                                    replace=False)
+                    batch_indices = tf_utils.rnd_ind(train_data,args.batch_size)
                     batch_data = train_data[batch_indices]
                     batch_labels = train_labels[batch_indices]
                     _, acc = s.run([train_optim_step,real_acc],
@@ -177,14 +194,10 @@ def run(args):
 
     s.run([reset_students,reset_train_optim])
     test_steps=max((args.test_epochs*args.memory_size//args.batch_size)+1,600)
+    test_steps=1
     for step in range(test_steps):
-        if args.batch_size>args.memory_size:
-            memory_indices = list(range(args.memory_size))
-        else:
-            memory_indices = np.random.choice(args.memory_size,args.batch_size,
-                                            replace=False)
-        batch_indices = np.random.choice(len(test_data),args.batch_size,
-                                        replace=False)
+        memory_indices = tf_utils.rnd_ind(args.memory_size,args.batch_size)
+        batch_indices = tf_utils.rnd_ind(test_data,args.batch_size)
         batch_data=test_data[batch_indices]
         batch_labels=test_labels[batch_indices]
         _, logs_,test_conf_ = s.run([test_optim_step, logs,test_conf],
@@ -212,22 +225,14 @@ def run(args):
     s.run([reset_students,reset_train_optim])
     perm = permutation(args.memory_size)
     for step in range(test_steps):
-        if args.batch_size>args.memory_size:
-            batch_indices = list(range(args.memory_size))
-        else:
-            batch_indices = np.random.choice(args.memory_size,args.batch_size,
-                                            replace=False)
+        batch_indices = tf_utils.rnd_ind(args.memory_size,args.batch_size)
         batch_indices = perm[batch_indices]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
-        if args.batch_size>args.memory_size:
-            memory_indices = list(range(args.memory_size))
-        else:
-            memory_indices = np.random.choice(args.memory_size,args.batch_size,
-                                            replace=False)
+        memory_indices = tf_utils.rnd_ind(args.memory_size,args.batch_size)
 
-        batch_test_indices = np.random.choice(len(test_data),args.batch_size,
-                                                replace=False)
+
+        batch_test_indices = tf_utils.rnd_ind(test_data,args.batch_size)
         batch_test_data = test_data[batch_test_indices]
         batch_test_labels = test_labels[batch_test_indices]
         _, logs_ = s.run([train_optim_step,logs],
@@ -244,9 +249,10 @@ def run(args):
                                     tf.nn.softmax(fake_labels),
                                     covariance(fake_labels)])
     np.set_printoptions(linewidth=10000,suppress=True,precision=4)
-    print(cov_)
-    print(fake_labels_[:30])
-    tf_utils.simple_img(fake_data_,os.path.join(args.out_dir,'memory.png'),30)
+    pfile(cov_,'cor_mat.txt',args)
+    pfile(fake_labels_[:100],'fake_labels.txt',args)
+    tf_utils.save_img(test_data,fake_data_,
+                    os.path.join(args.out_dir,'memory.png'),50)
             
 
 def main():
