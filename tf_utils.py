@@ -108,7 +108,10 @@ class ConvProj(object):
         else:
           if len(layer)!=3 and first:
             first=False
-            in_size = shape[1]*shape[2]*self.layers[i-1][-1]//(4**i)
+            s = (shape[1]//(2**i))
+            if s==3:
+              s=4
+            in_size = s*s*self.layers[i-1][-1]
           self.w.append(tf.get_variable(f'w_{i}',[in_size,layer[-1]],
                         initializer=xavier_initializer()))
         self.b.append(tf.get_variable(f'b_{i}', [1,layer[-1]],

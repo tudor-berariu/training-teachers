@@ -1,27 +1,29 @@
-dataset: 'fashion_mnist'
-memory_size: 10000
+dataset: 'mnist'
+memory_size: 1000
 proj: 'conv'
 ds_size: 100
 data_batch: 100
 in_size: [1000]
 out_size: 10
-n_proj: 10
+n_proj: 7
 epochs: 100
 lin:
   layers: [256]
 conv:
-  layers: [[5,5,8],[3,3,16],[256]]
-  dropout: 0
+  layers: [[5,5,32],[3,3,64],[3,3,128],[512],[256]]
+  dropout: 0.1
 activation: 'relu'
 verbose: 1
 reset_freq: 1
-objective: 'grad_cos'
+objective: 'grad_mse'
 align_grad: 0
-batch_size: 512
+batch_size: 256
 optim: 'adam'
 lr: 0.01
 train_proj: 0
-test_epochs: 20
+test_epochs: 30
+min_test_it: 4000
 real_divergence: 0.1
 full_memory: 1
 use_gpu: 1
+parallel: 0
