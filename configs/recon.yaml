@@ -1,25 +1,25 @@
-dataset: 'cifar10'
-memory_size: 2000
+dataset: 'mnist'
+memory_size: 100
 proj: 'conv'
 ds_size: 100
 data_batch: 100
 in_size: [1000]
 out_size: 10
 n_proj: 50
-epochs: 1
+epochs: 100
 lin:
   layers: [256]
 conv:
-  layers: [[5,5,32],[3,3,64],[3,3,128],[512],[256]]
-  dropout: 0.1
+  layers: [[5,5,32],[3,3,64],[128]]
+  dropout: 0
 activation: 'relu'
-verbose: 1
+verbose: 0
 reset_freq: 1
 objective: 'grad_cos'
 align_grad: 0
-batch_size: 256
-optim: 'adam'
-lr: 0.01
+batch_size: 32
+optim: 'sgd'
+lr: 0.005
 train_proj: 0
 test_epochs: 20
 min_test_it: 3000

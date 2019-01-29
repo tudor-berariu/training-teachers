@@ -1,43 +1,10 @@
 from liftoff.config import read_config
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.datasets import fashion_mnist,mnist,cifar10
 from numpy.random import permutation
-from tf_utils import ConvProj, kl, cosine, save_img, covariance
 import tf_utils
 import os
-
-def get_dataset(args):
-    if args.dataset == 'fashion_mnist':
-        (train_data, train_labels), (test_data,test_labels) = \
-            fashion_mnist.load_data()
-        train_data = train_data.astype(np.float32)/255
-        test_data = test_data.astype(np.float32)/255
-        return (train_data[:,:,:,np.newaxis], train_labels), \
-                (test_data[:,:,:,np.newaxis],test_labels)
-    elif args.dataset == 'mnist':
-        (train_data, train_labels), (test_data,test_labels) = \
-            mnist.load_data()
-        train_data = train_data.astype(np.float32)/255
-        test_data = test_data.astype(np.float32)/255
-        return (train_data[:,:,:,np.newaxis], train_labels), \
-                (test_data[:,:,:,np.newaxis],test_labels)
-    elif args.dataset == 'cifar10':
-        (train_data, train_labels), (test_data,test_labels) = \
-            cifar10.load_data()
-        train_data = train_data.astype(np.float32)/255
-        test_data = test_data.astype(np.float32)/255
-        return (train_data, np.reshape(train_labels,[-1])), \
-                (test_data, np.reshape(test_labels,[-1]))
-
-
-def create_session(args):
-    config = tf.ConfigProto()
-    if args.use_gpu==1:
-        config.gpu_options.allow_growth = True
-    else:
-        config = tf.ConfigProto(device_count = {'GPU':0})
-    return tf.Session(config=config)
+from tf_utils import *
 
 
 def create_students(args,shape):
