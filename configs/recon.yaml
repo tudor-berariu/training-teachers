@@ -6,7 +6,7 @@ data_batch: 100
 in_size: [1000]
 out_size: 10
 n_proj: 50
-epochs: 100
+epochs: 300
 lin:
   layers: [256]
 conv:
@@ -17,11 +17,12 @@ verbose: 0
 reset_freq: 1
 objective: 'grad_cos'
 align_grad: 0
-batch_size: 32
+batch_size: 16
 optim: 'sgd'
 lr: 0.005
 train_proj: 0
 test_epochs: 20
+train_epochs: 100
 min_test_it: 3000
 real_divergence: 0.1
 full_memory: 1

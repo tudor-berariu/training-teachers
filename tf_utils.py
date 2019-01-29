@@ -110,67 +110,73 @@ class Model(object):
         ops.append(tf.assign(self.b[i-len(self.w)], params[i]))
     return ops
 
-  def train(self,s,train_data,train_labels,val_data,val_labels,args,save=None):
-    with tf.variable_scope(self.name+'_train', reuse=tf.AUTO_REUSE):
-      if args.optim == 'sgd':
-        optim = tf.train.GradientDescentOptimizer(learning_rate=args.lr,
-                                                  name='optimizer')
-      indices = tf.placeholder(tf.int32,[None],name='ind')
-      training = tf.placeholder_with_default(True,None,name='training')
-      ref_data = tf.cond(training, lambda: train_data, lambda: val_data,
-                          name='ref_data')
-      ref_labels = tf.cond(training, lambda: train_labels, lambda: val_labels,
-                          name='ref_labels')
-      batch_data_ = tf.gather(ref_data, indices,name='batch_data')
-      batch_labels_ = tf.gather(ref_labels, indices, name='batch_labels')
-      batch_labels_onehot = tf.one_hot(batch_labels_, 10, dtype=tf.float32,
-                                      name='batch_labels_onehot')
-      output = self(batch_data_)
-      objective = tf.reduce_mean(kl(batch_labels_onehot, output))
-      optim_step = optim.minimize(objective,var_list = self.vars)
-      accuracy = acc(output,batch_labels_onehot)
-      train_size = int(s.run(tf.shape(train_data))[0])
-      val_size = int(s.run(tf.shape(val_data))[0])
-      best_acc = 0
-      best_epoch = 0
-      not_better = 0
-      accs = []
-      losses = []
-      for e in range(args.epochs):
-        iters = 1+train_size//args.batch_size
-        for it in range(iters):
-          ind = rnd_ind(train_size,args.batch_size)
-          _,acc_,loss_ = s.run([optim_step,accuracy,objective],
-                                feed_dict={indices:ind})
-          losses.append(loss_)
-          # if args.verbose==1:
-          #   print(f'epoch[{e}] it[{it+1}/{iters}] '
-          #         f'loss[{loss_:.12f}] acc[{acc_:.4f}]')
-        iters = 1+val_size//args.batch_size
-        t_acc = 0
-        for it in range(iters):
-          ind = rnd_ind(val_size,args.batch_size)
-          t_acc += s.run(accuracy,feed_dict={indices:ind,training:False})/iters
-        if args.verbose:
-          print(f'epoch[{e}] val_acc[{t_acc:.4f}]')
-        accs.append(t_acc)
-        if t_acc > best_acc:
-          best_acc = t_acc
-          not_better = 0
-          best_epoch = e
-          if save is not None:
-            with open(save+'_params.bin','wb') as stream:
-              pickle.dump(s.run(self.vars), stream)
-        else:
-          not_better+=1
-        if not_better>5:
-          break
-      d = {'train_loss': np.array(losses),'val_acc': np.array(accs)}
+  def prepare_train(self,s,train_data,train_labels,val_data,val_labels,args):
+    if args.optim == 'sgd':
+      optim = tf.train.GradientDescentOptimizer(
+                                                learning_rate=args.lr,
+                                                name='optimizer')
+    indices = tf.placeholder(tf.int32,[None],name='ind')
+    training = tf.placeholder_with_default(True,None,name='training')
+    ref_data = tf.cond(training, lambda: train_data, lambda: val_data,
+                        name='ref_data')
+    ref_labels = tf.cond(training, lambda: train_labels, lambda: val_labels,
+                        name='ref_labels')
+    batch_data_ = tf.gather(ref_data, indices,name='batch_data')
+    batch_labels_ = tf.gather(ref_labels, indices, name='batch_labels')
+
+    output = self(batch_data_)
+    objective = tf.reduce_mean(kl(batch_labels_, output))
+    optim_step = optim.minimize(objective,var_list = self.vars)
+    accuracy = acc(output,batch_labels_)
+    train_size = int(s.run(tf.shape(train_data))[0])
+    val_size = int(s.run(tf.shape(val_data))[0])
+    return (indices, training, optim_step, objective,\
+            accuracy,train_size,val_size)
+
+  def train(self,s,indices, training, optim_step, objective, accuracy,
+            train_size, val_size, args, save=None):
+    best_acc = 0
+    best_epoch = 0
+    not_better = 0
+    accs = []
+    losses = []
+    for e in range(args.train_epochs):
+      iters = 1+train_size//args.batch_size
+      for it in range(iters):
+        ind = rnd_ind(train_size,args.batch_size)
+        _,acc_,loss_ = s.run([optim_step,accuracy,objective],
+                              feed_dict={indices:ind})
+        losses.append(loss_)
+        if args.verbose==1:
+          print(f'epoch[{e}] it[{it+1}/{iters}] '
+                f'loss[{loss_:.12f}] acc[{acc_:.4f}]')
+      iters = 1+val_size//args.batch_size
+      t_acc = 0
+      for it in range(iters):
+        ind = rnd_ind(val_size,args.batch_size)
+        t_acc += s.run(accuracy,feed_dict={indices:ind,training:False})/iters
+      if args.verbose == 1:
+        print(f'epoch[{e}] val_acc[{t_acc:.4f}]')
+      accs.append(t_acc)
+      if t_acc > best_acc+0.005:
+        best_acc = t_acc
+        not_better = 0
+        best_epoch = e
+        if save is not None:
+          with open(save+'_params.bin','wb') as stream:
+            pickle.dump(s.run(self.vars), stream)
+      else:
+        not_better+=1
+      if not_better>5:
+        break
+    d = {'train_loss': np.array(losses),'val_acc': np.array(accs)}
+    if save is not None:
       with open(save+'_best.txt','w') as stream:
         print(f'best acc: {best_acc}', file=stream)
         print(f'best_epoch: {best_epoch}', file=stream)
       with open(save+'_stats.bin','wb') as stream:
         pickle.dump(d, stream)
+    return best_acc
 
 
 
