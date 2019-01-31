@@ -15,7 +15,7 @@ def run(args):
                             tf.constant(train_labels[val_ind:])
     train_data, train_labels = tf.constant(train_data[:val_ind]), \
                                 tf.constant(train_labels[:val_ind])
-    train_labels, val_labels = tf.one_hot(train_labels,10,dtype=tf.float32)
+    train_labels, val_labels = tf.one_hot(train_labels,10,dtype=tf.float32), \
                                 tf.one_hot(val_labels,10,dtype=tf.float32)
 
     reinit = tf.global_variables_initializer()
@@ -24,7 +24,7 @@ def run(args):
     for i in range(1000):
         s.run(reinit)
         val = m.train(s,*graph_nodes,args,
-                        save=f'params/{args.dataset}/{i+52}')
+                        save=f'params/{args.dataset}_tanh/{i}')
         print(f'it[{i}] val[{val}]')
 
 
