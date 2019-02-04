@@ -39,13 +39,10 @@ def run(args):
     train_shape.extend([int(x) for x in train_data.shape[1:]])
     students, students_params = create_students(args, train_shape)
 
-    full_real_grad = []
-    full_fake_grad = []
     training_fake = tf.placeholder_with_default(True,None)
     training_real = tf.placeholder_with_default(True,None)
     batch_data_ = tf.placeholder(tf.float32, train_shape,
                                 'data_placeholder')
-    batch_test_data_ = tf.placeholder(tf.float32,train_shape)
     batch_labels_ = tf.placeholder(tf.int32,[None],'labels_placeholder')
     batch_labels_onehot = tf.one_hot(batch_labels_, 10, dtype=tf.float32)
     
